@@ -65,7 +65,7 @@ func TestNewAuthenticator(t *testing.T) {
 		})
 		expectedDeviceURL := "https://company.ghe.com/login/device/code"
 		expectedAccessURL := "https://company.ghe.com/login/oauth/access_token"
-		
+
 		if auth.deviceCodeURL != expectedDeviceURL {
 			t.Errorf("expected deviceCodeURL to be %q, got %q", expectedDeviceURL, auth.deviceCodeURL)
 		}

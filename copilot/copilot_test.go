@@ -113,7 +113,7 @@ func TestConvertRequest(t *testing.T) {
 		temp := float32(0.8)
 		topP := float32(0.9)
 		maxTokens := int32(100)
-		
+
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{
@@ -122,9 +122,9 @@ func TestConvertRequest(t *testing.T) {
 				},
 			},
 			Config: &genai.GenerateContentConfig{
-				Temperature:      &temp,
-				TopP:             &topP,
-				MaxOutputTokens:  maxTokens,
+				Temperature:     &temp,
+				TopP:            &topP,
+				MaxOutputTokens: maxTokens,
 			},
 		}
 
