@@ -24,6 +24,10 @@ const (
 	defaultCopilotAPIKeyURL    = "https://api.github.com/copilot_internal/v2/token"
 	defaultDeviceCodeURL       = "https://github.com/login/device/code"
 	defaultAccessTokenURL      = "https://github.com/login/oauth/access_token"
+	// copilotClientID is the OAuth client ID for GitHub Copilot.
+	// This is the public client ID used by GitHub Copilot integrations,
+	// as documented in the opencode-copilot-auth reference implementation:
+	// https://github.com/sst/opencode-copilot-auth/blob/main/index.mjs
 	copilotClientID            = "Iv1.b507a08c87ecfe98"
 	copilotChatCompletionsPath = "/chat/completions"
 )
