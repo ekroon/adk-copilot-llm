@@ -180,13 +180,32 @@ for resp, err := range llm.GenerateContent(ctx, request, true) {
 
 See the [examples](./examples) directory for complete working examples:
 
+### Basic Example
+
 ```bash
-# Run the example
+# Run the basic example
 cd examples
 GITHUB_TOKEN=your_token_here go run main.go
 ```
 
 If you don't have a token, the example will guide you through the device flow authentication.
+
+### Token Storage with go-keyring
+
+The [with_keyring](./examples/with_keyring) example demonstrates how to securely store and retrieve GitHub tokens using your system's keyring:
+
+```bash
+# Run the keyring example
+cd examples/with_keyring
+go run main.go
+```
+
+This example:
+- Securely stores tokens in your system's credential manager (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux)
+- Automatically retrieves stored tokens for subsequent runs
+- Only prompts for authentication when no token is found
+
+See the [keyring example README](./examples/with_keyring/README.md) for more details.
 
 ## Authentication Flow
 
