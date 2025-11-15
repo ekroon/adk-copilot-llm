@@ -60,7 +60,7 @@ func main() {
 		}
 		if resp.Content != nil && len(resp.Content.Parts) > 0 {
 			for _, part := range resp.Content.Parts {
-				fmt.Printf("%v", part)
+				fmt.Print(part.Text)
 			}
 		}
 	}
@@ -87,7 +87,7 @@ func main() {
 		}
 		if resp.Content != nil && len(resp.Content.Parts) > 0 {
 			for _, part := range resp.Content.Parts {
-				fmt.Printf("%v", part)
+				fmt.Print(part.Text)
 			}
 		}
 		if resp.TurnComplete {
@@ -125,7 +125,7 @@ func main() {
 		}
 		if resp.Content != nil && len(resp.Content.Parts) > 0 {
 			for _, part := range resp.Content.Parts {
-				fmt.Printf("%v", part)
+				fmt.Print(part.Text)
 			}
 		}
 	}

@@ -3,6 +3,7 @@
 package copilot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,11 +20,11 @@ import (
 
 const (
 	// Default GitHub URLs
-	defaultGitHubDomain        = "github.com"
-	defaultBaseURL             = "https://api.githubcopilot.com"
-	defaultCopilotAPIKeyURL    = "https://api.github.com/copilot_internal/v2/token"
-	defaultDeviceCodeURL       = "https://github.com/login/device/code"
-	defaultAccessTokenURL      = "https://github.com/login/oauth/access_token"
+	defaultGitHubDomain     = "github.com"
+	defaultBaseURL          = "https://api.githubcopilot.com"
+	defaultCopilotAPIKeyURL = "https://api.github.com/copilot_internal/v2/token"
+	defaultDeviceCodeURL    = "https://github.com/login/device/code"
+	defaultAccessTokenURL   = "https://github.com/login/oauth/access_token"
 	// copilotClientID is the OAuth client ID for GitHub Copilot.
 	// This is the public client ID used by GitHub Copilot integrations,
 	// as documented in the opencode-copilot-auth reference implementation:
@@ -583,7 +584,7 @@ func newSSEReader(r io.Reader) *sseReader {
 func (r *sseReader) ReadLine() (string, error) {
 	for {
 		// Check if we have a complete line in the buffer
-		if idx := strings.Index(string(r.buffer), "\n"); idx >= 0 {
+		if idx := bytes.IndexByte(r.buffer, '\n'); idx >= 0 {
 			line := string(r.buffer[:idx])
 			r.buffer = r.buffer[idx+1:]
 			return strings.TrimSpace(line), nil
