@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -68,6 +69,8 @@ func NewAuthenticator(cfg AuthConfig) *Authenticator {
 
 // StartDeviceFlow initiates the device authorization flow.
 func (a *Authenticator) StartDeviceFlow(ctx context.Context) (*DeviceCodeResponse, error) {
+	slog.Debug("Starting device flow authentication", "url", a.deviceCodeURL)
+	
 	reqBody := map[string]string{
 		"client_id": copilotClientID,
 		"scope":     "read:user",
@@ -75,11 +78,13 @@ func (a *Authenticator) StartDeviceFlow(ctx context.Context) (*DeviceCodeRespons
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
+		slog.Error("Failed to marshal device flow request", "error", err)
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", a.deviceCodeURL, strings.NewReader(string(body)))
 	if err != nil {
+		slog.Error("Failed to create device flow request", "error", err)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -89,42 +94,68 @@ func (a *Authenticator) StartDeviceFlow(ctx context.Context) (*DeviceCodeRespons
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		slog.Error("Failed to send device flow request", "error", err)
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		slog.Error("Device code request failed", "status", resp.StatusCode, "body", string(body))
 		return nil, fmt.Errorf("device code request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var deviceResp DeviceCodeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&deviceResp); err != nil {
+		slog.Error("Failed to decode device flow response", "error", err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+
+	slog.Info("Device flow started successfully",
+		"verification_uri", deviceResp.VerificationURI,
+		"user_code", deviceResp.UserCode,
+		"expires_in", deviceResp.ExpiresIn,
+		"interval", deviceResp.Interval)
 
 	return &deviceResp, nil
 }
 
 // PollForAccessToken polls the access token endpoint until authorization is complete.
 func (a *Authenticator) PollForAccessToken(ctx context.Context, deviceCode string, interval int) (string, error) {
-	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	currentInterval := time.Duration(interval) * time.Second
+	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
+
+	slog.Info("Starting to poll for access token", "initial_interval_seconds", interval)
 
 	for {
 		select {
 		case <-ctx.Done():
+			slog.Warn("Context cancelled while polling for access token", "error", ctx.Err())
 			return "", ctx.Err()
 		case <-ticker.C:
+			slog.Debug("Checking access token status")
 			token, err := a.checkAccessToken(ctx, deviceCode)
 			if err != nil {
 				// Check if it's a pending error
 				if strings.Contains(err.Error(), "authorization_pending") {
+					slog.Debug("Authorization still pending, continuing to poll")
 					continue
 				}
+				// Check if we're polling too fast
+				if strings.Contains(err.Error(), "slow_down") {
+					// Increase the interval by 5 seconds as per OAuth spec
+					currentInterval += 5 * time.Second
+					ticker.Reset(currentInterval)
+					slog.Warn("Received slow_down error, increasing polling interval",
+						"new_interval_seconds", currentInterval.Seconds())
+					continue
+				}
+				slog.Error("Failed to check access token", "error", err)
 				return "", err
 			}
 			if token != "" {
+				slog.Info("Successfully obtained access token")
 				return token, nil
 			}
 		}
@@ -141,11 +172,13 @@ func (a *Authenticator) checkAccessToken(ctx context.Context, deviceCode string)
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
+		slog.Error("Failed to marshal access token request", "error", err)
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", a.accessURL, strings.NewReader(string(body)))
 	if err != nil {
+		slog.Error("Failed to create access token request", "error", err)
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -155,21 +188,25 @@ func (a *Authenticator) checkAccessToken(ctx context.Context, deviceCode string)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		slog.Error("Failed to send access token request", "error", err)
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		slog.Debug("Access token request returned non-OK status", "status", resp.StatusCode, "body", string(body))
 		return "", fmt.Errorf("access token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tokenResp AccessTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		slog.Error("Failed to decode access token response", "error", err)
 		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if tokenResp.Error != "" {
+		slog.Debug("Access token response contains error", "error", tokenResp.Error)
 		return "", fmt.Errorf("%s", tokenResp.Error)
 	}
 
@@ -179,9 +216,12 @@ func (a *Authenticator) checkAccessToken(ctx context.Context, deviceCode string)
 // Authenticate performs the complete device flow authentication.
 // It returns the access token and prints instructions for the user.
 func (a *Authenticator) Authenticate(ctx context.Context) (string, error) {
+	slog.Info("Starting GitHub Copilot authentication")
+	
 	// Start device flow
 	deviceResp, err := a.StartDeviceFlow(ctx)
 	if err != nil {
+		slog.Error("Failed to start device flow", "error", err)
 		return "", fmt.Errorf("failed to start device flow: %w", err)
 	}
 
@@ -193,9 +233,11 @@ func (a *Authenticator) Authenticate(ctx context.Context) (string, error) {
 	// Poll for access token
 	token, err := a.PollForAccessToken(ctx, deviceResp.DeviceCode, deviceResp.Interval)
 	if err != nil {
+		slog.Error("Failed to get access token", "error", err)
 		return "", fmt.Errorf("failed to get access token: %w", err)
 	}
 
 	fmt.Printf("Successfully authenticated!\n")
+	slog.Info("Authentication completed successfully")
 	return token, nil
 }
