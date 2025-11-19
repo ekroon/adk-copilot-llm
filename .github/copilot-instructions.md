@@ -73,27 +73,6 @@ if strings.Contains(err.Error(), "slow_down") {
 }
 ```
 
-## Authentication Flow
-
-### Handling Rate Limiting
-
-The OAuth device flow can return `slow_down` errors if polling happens too frequently:
-
-1. Start with the interval provided by the device flow response
-2. If `slow_down` error is received, increase interval by 5 seconds
-3. Log the backoff with appropriate context
-4. Continue polling with the new interval
-
-```go
-if strings.Contains(err.Error(), "slow_down") {
-    currentInterval += 5 * time.Second
-    ticker.Reset(currentInterval)
-    slog.Warn("Received slow_down error, increasing polling interval",
-        "new_interval_seconds", currentInterval.Seconds())
-    continue
-}
-```
-
 ## Testing
 
 - Write tests for new functionality
