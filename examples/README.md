@@ -2,7 +2,7 @@
 
 This directory contains example applications demonstrating how to use the adk-copilot-llm library.
 
-## auth_demo.go
+## auth-demo
 
 Demonstrates the authentication flow with structured logging using `slog`.
 
@@ -10,13 +10,14 @@ Demonstrates the authentication flow with structured logging using `slog`.
 
 ```bash
 # Run with INFO level logging (default)
-go run auth_demo.go
+cd auth-demo
+go run .
 
 # Run with DEBUG level logging to see detailed information
-LOG_LEVEL=DEBUG go run auth_demo.go
+LOG_LEVEL=DEBUG go run .
 
 # Run with WARN level to see only warnings and errors
-LOG_LEVEL=WARN go run auth_demo.go
+LOG_LEVEL=WARN go run .
 ```
 
 ### What you'll see
@@ -49,18 +50,20 @@ time=2025-11-19T13:00:15.200Z level=INFO msg="Successfully obtained access token
 Successfully authenticated! Token length: 40
 ```
 
-## main.go
+## basic-usage
 
 Full example showing how to use the Copilot LLM for content generation.
 
 ### Usage
 
 ```bash
+cd basic-usage
+
 # With existing token
-GITHUB_TOKEN=your_token_here go run main.go
+GITHUB_TOKEN=your_token_here go run .
 
 # Without token (will initiate device flow)
-go run main.go
+go run .
 ```
 
 This example demonstrates:
