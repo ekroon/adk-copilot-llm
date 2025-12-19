@@ -35,7 +35,12 @@ const (
 
 // Config holds the configuration for the Copilot LLM.
 type Config struct {
-	// GitHubToken is the GitHub OAuth access token (refresh token in OAuth flow).
+	// GitHubToken is the GitHub token for authentication.
+	// Supports two types:
+	// - GitHub Personal Access Token (PAT): Tokens starting with "github_pat_"
+	//   are used directly without token exchange.
+	// - OAuth Access Token: Regular OAuth tokens that will be exchanged for
+	//   Copilot API keys through the token exchange API.
 	GitHubToken string
 	// EnterpriseURL is the optional GitHub Enterprise URL.
 	EnterpriseURL string
@@ -134,6 +139,11 @@ func (c *CopilotLLM) GenerateContent(ctx context.Context, req *model.LLMRequest,
 	}
 }
 
+// isPAT checks if a token is a GitHub Personal Access Token.
+func isPAT(token string) bool {
+	return len(token) > len("github_pat_") && strings.HasPrefix(token, "github_pat_")
+}
+
 // ensureAPIKey ensures we have a valid Copilot API key, refreshing if necessary.
 func (c *CopilotLLM) ensureAPIKey(ctx context.Context) error {
 	c.mu.RLock()
@@ -150,6 +160,17 @@ func (c *CopilotLLM) ensureAPIKey(ctx context.Context) error {
 	if c.copilotAPIKey != "" && time.Now().Before(c.apiKeyExpiresAt) {
 		return nil
 	}
+
+	// Check if token is a Personal Access Token (PAT)
+	if isPAT(c.config.GitHubToken) {
+		// PAT tokens are used directly without exchange
+		c.copilotAPIKey = c.config.GitHubToken
+		// Set expiration far in the future (10 years)
+		c.apiKeyExpiresAt = time.Now().Add(10 * 365 * 24 * time.Hour)
+		return nil
+	}
+
+	// OAuth token - exchange for Copilot API key
 
 	// Fetch new API key
 	req, err := http.NewRequestWithContext(ctx, "GET", c.apiKeyURL, nil)

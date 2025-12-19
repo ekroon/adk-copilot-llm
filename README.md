@@ -5,7 +5,8 @@ A Go module that implements the [adk-go](https://github.com/google/adk-go) LLM i
 ## Features
 
 - ✅ Implements the `model.LLM` interface from adk-go
-- ✅ GitHub Copilot authentication via OAuth device flow
+- ✅ Multiple authentication methods (PAT and OAuth device flow)
+- ✅ GitHub Personal Access Token (PAT) support for direct usage
 - ✅ Token management with automatic refresh
 - ✅ Streaming and non-streaming content generation
 - ✅ Support for GitHub Enterprise
@@ -26,7 +27,60 @@ go get github.com/ekroon/adk-copilot-llm
 
 ## Quick Start
 
-### Option 1: Using Environment Variable
+### Option 1: Using GitHub Personal Access Token (Recommended)
+
+GitHub Personal Access Tokens (starting with `github_pat_`) are used directly without token exchange, providing simpler authentication:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/ekroon/adk-copilot-llm/copilot"
+    "google.golang.org/adk/model"
+    "google.golang.org/genai"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Create Copilot LLM instance with PAT token
+    // PAT tokens are used directly without exchange
+    llm, err := copilot.New(copilot.Config{
+        GitHubToken: "github_pat_YOUR_TOKEN_HERE",
+        Model:       "gpt-4",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Create a request
+    request := &model.LLMRequest{
+        Contents: []*genai.Content{
+            {
+                Role:  "user",
+                Parts: []*genai.Part{genai.NewPartFromText("Hello!")},
+            },
+        },
+    }
+
+    // Generate content
+    for resp, err := range llm.GenerateContent(ctx, request, false) {
+        if err != nil {
+            log.Fatal(err)
+        }
+        if resp.Content != nil {
+            for _, part := range resp.Content.Parts {
+                log.Printf("%s", part.Text)
+            }
+        }
+    }
+}
+```
+
+### Option 2: Using Environment Variable
 
 ```go
 package main
@@ -45,6 +99,7 @@ func main() {
     ctx := context.Background()
 
     // Create Copilot LLM instance with token from environment
+    // Supports both PAT tokens (github_pat_*) and OAuth tokens
     llm, err := copilot.New(copilot.Config{
         GitHubToken: os.Getenv("GITHUB_TOKEN"),
         Model:       "gpt-4",
@@ -77,7 +132,9 @@ func main() {
 }
 ```
 
-### Option 2: Device Flow Authentication
+### Option 3: OAuth Device Flow Authentication
+
+For OAuth-based authentication that exchanges tokens for Copilot API keys:
 
 ```go
 package main
@@ -118,7 +175,12 @@ The `Config` struct supports the following options:
 
 ```go
 type Config struct {
-    // GitHubToken is the GitHub OAuth access token (required)
+    // GitHubToken is the GitHub token for authentication (required)
+    // Supports two types:
+    // - Personal Access Token (PAT): Tokens starting with "github_pat_"
+    //   are used directly without token exchange
+    // - OAuth Access Token: Regular OAuth tokens that will be exchanged
+    //   for Copilot API keys through the token exchange API
     GitHubToken string
     
     // EnterpriseURL is the optional GitHub Enterprise URL
@@ -133,6 +195,44 @@ type Config struct {
     HTTPClient *http.Client
 }
 ```
+
+## Authentication Methods
+
+This library supports two authentication methods:
+
+### 1. GitHub Personal Access Token (PAT)
+
+Personal Access Tokens (starting with `github_pat_`) are the simplest authentication method. They are used directly without token exchange:
+
+```go
+llm, err := copilot.New(copilot.Config{
+    GitHubToken: "github_pat_YOUR_TOKEN_HERE",
+    Model:       "gpt-4",
+})
+```
+
+**Advantages:**
+- No token exchange API calls needed
+- Simpler setup
+- Direct usage
+
+### 2. OAuth Token Exchange
+
+OAuth tokens obtained through the device flow are exchanged for Copilot API keys:
+
+```go
+auth := copilot.NewAuthenticator(copilot.AuthConfig{})
+token, err := auth.Authenticate(ctx)
+
+llm, err := copilot.New(copilot.Config{
+    GitHubToken: token,
+    Model:       "gpt-4",
+})
+```
+
+**Advantages:**
+- Standard OAuth flow
+- Automatic token refresh
 
 ## GitHub Enterprise Support
 

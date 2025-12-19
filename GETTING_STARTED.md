@@ -24,9 +24,44 @@ go get github.com/ekroon/adk-copilot-llm
 
 You have two options for authentication:
 
-#### Option A: Device Flow (Recommended for first-time setup)
+#### Option A: GitHub Personal Access Token (Recommended)
 
-This method walks you through the GitHub OAuth process:
+The simplest method is to use a GitHub Personal Access Token (PAT). These tokens start with `github_pat_` and are used directly without token exchange.
+
+**To create a PAT:**
+1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Generate a new token with appropriate scopes for Copilot access
+3. Copy the token (it starts with `github_pat_`)
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    
+    "github.com/ekroon/adk-copilot-llm/copilot"
+)
+
+func main() {
+    ctx := context.Background()
+    
+    // Use PAT token directly (no exchange needed)
+    llm, err := copilot.New(copilot.Config{
+        GitHubToken: "github_pat_YOUR_TOKEN_HERE",
+        Model:       "gpt-4",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Use the LLM...
+}
+```
+
+#### Option B: OAuth Device Flow (For OAuth-based authentication)
+
+This method walks you through the GitHub OAuth process and exchanges the token for Copilot API keys:
 
 ```go
 package main
@@ -53,9 +88,9 @@ func main() {
 }
 ```
 
-#### Option B: Environment Variable (For production use)
+#### Option C: Environment Variable (For production use)
 
-Set your GitHub token as an environment variable:
+Set your GitHub token as an environment variable (works with both PAT and OAuth tokens):
 
 ```bash
 export GITHUB_TOKEN=your_token_here

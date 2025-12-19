@@ -1,7 +1,9 @@
 package copilot
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -175,6 +177,130 @@ func TestMapFinishReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsPAT(t *testing.T) {
+	tests := []struct {
+		name     string
+		token    string
+		expected bool
+	}{
+		{
+			name:     "valid PAT token",
+			token:    "github_pat_1234567890abcdef",
+			expected: true,
+		},
+		{
+			name:     "OAuth token",
+			token:    "gho_1234567890abcdef",
+			expected: false,
+		},
+		{
+			name:     "empty token",
+			token:    "",
+			expected: false,
+		},
+		{
+			name:     "random string",
+			token:    "random_token_string",
+			expected: false,
+		},
+		{
+			name:     "prefix without underscore",
+			token:    "github_pat",
+			expected: false,
+		},
+		{
+			name:     "PAT prefix in middle",
+			token:    "prefix_github_pat_suffix",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isPAT(tt.token)
+			if result != tt.expected {
+				t.Errorf("isPAT(%q) = %v; want %v", tt.token, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestEnsureAPIKeyWithPAT(t *testing.T) {
+	t.Run("PAT token used directly", func(t *testing.T) {
+		patToken := "github_pat_1234567890abcdef"
+		llm, err := New(Config{
+			GitHubToken: patToken,
+		})
+		if err != nil {
+			t.Fatalf("failed to create LLM: %v", err)
+		}
+
+		ctx := context.Background()
+		err = llm.ensureAPIKey(ctx)
+		if err != nil {
+			t.Errorf("ensureAPIKey failed: %v", err)
+		}
+
+		// Verify PAT was set directly
+		llm.mu.RLock()
+		apiKey := llm.copilotAPIKey
+		expiresAt := llm.apiKeyExpiresAt
+		llm.mu.RUnlock()
+
+		if apiKey != patToken {
+			t.Errorf("expected copilotAPIKey to be PAT token %q, got %q", patToken, apiKey)
+		}
+
+		// Verify expiration is far in the future (at least 5 years)
+		fiveYearsFromNow := time.Now().Add(5 * 365 * 24 * time.Hour)
+		if expiresAt.Before(fiveYearsFromNow) {
+			t.Errorf("expected expiration to be far in future, got %v", expiresAt)
+		}
+	})
+
+	t.Run("PAT token cached on subsequent calls", func(t *testing.T) {
+		patToken := "github_pat_cached_test"
+		llm, err := New(Config{
+			GitHubToken: patToken,
+		})
+		if err != nil {
+			t.Fatalf("failed to create LLM: %v", err)
+		}
+
+		ctx := context.Background()
+
+		// First call
+		err = llm.ensureAPIKey(ctx)
+		if err != nil {
+			t.Errorf("first ensureAPIKey call failed: %v", err)
+		}
+
+		llm.mu.RLock()
+		firstAPIKey := llm.copilotAPIKey
+		firstExpiry := llm.apiKeyExpiresAt
+		llm.mu.RUnlock()
+
+		// Second call - should use cached key
+		err = llm.ensureAPIKey(ctx)
+		if err != nil {
+			t.Errorf("second ensureAPIKey call failed: %v", err)
+		}
+
+		llm.mu.RLock()
+		secondAPIKey := llm.copilotAPIKey
+		secondExpiry := llm.apiKeyExpiresAt
+		llm.mu.RUnlock()
+
+		if firstAPIKey != secondAPIKey {
+			t.Errorf("API key changed between calls: %q != %q", firstAPIKey, secondAPIKey)
+		}
+
+		if firstExpiry != secondExpiry {
+			t.Errorf("expiration changed between calls: %v != %v", firstExpiry, secondExpiry)
+		}
+	})
 }
 
 func TestChatMessageMarshalJSON(t *testing.T) {
