@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/ekroon/adk-copilot-llm/copilot"
 	"google.golang.org/adk/model"
@@ -15,9 +16,13 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Replace with your GitHub Personal Access Token
+	// Read GitHub Personal Access Token from environment variable
 	// Get it from: GitHub Settings → Developer settings → Personal access tokens
-	token := "github_pat_YOUR_TOKEN_HERE"
+	// Set it with: export GITHUB_TOKEN=github_pat_YOUR_TOKEN_HERE
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		log.Fatal("GITHUB_TOKEN environment variable is required")
+	}
 
 	fmt.Println("GitHub Copilot - Personal Access Token Example")
 	fmt.Println("===============================================")
