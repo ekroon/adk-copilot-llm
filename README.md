@@ -21,20 +21,7 @@ go get github.com/ekroon/adk-copilot-llm
 - Go 1.24 or later
 - A GitHub account with access to Copilot
 - Active GitHub Copilot subscription
-- **GitHub Copilot CLI installed and authenticated**
-
-### Installing the Copilot CLI
-
-The Copilot CLI handles all authentication automatically. Install it following the [official instructions](https://docs.github.com/en/copilot/github-copilot-in-the-cli).
-
-Once installed, authenticate with:
-
-```bash
-gh auth login
-gh extension install github/gh-copilot
-```
-
-You can also set the `COPILOT_CLI_PATH` environment variable if the CLI is installed in a non-standard location.
+- **GitHub Copilot CLI installed and authenticated** (see [official instructions](https://docs.github.com/en/copilot/github-copilot-in-the-cli))
 
 ## Quick Start
 
@@ -176,6 +163,129 @@ See the [examples](./examples) directory for complete working examples:
 cd examples
 go run main.go
 ```
+
+## Tool Support
+
+Tool support enables the LLM to call external functions during conversation, allowing the model to perform actions like querying databases, calling APIs, or executing calculations. The copilot SDK provides a two-part setup:
+
+1. **Define tool schemas** using `genai.Tool` to describe available functions
+2. **Provide handlers** that execute when the LLM calls a tool
+
+The copilot SDK automatically handles the call/response cycle: when the model decides to use a tool, your handler is invoked, and the result is sent back to continue the conversation.
+
+### Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/ekroon/adk-copilot-llm/copilot"
+    "google.golang.org/adk/model"
+    "google.golang.org/genai"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Define tool schema
+    tools := []*genai.Tool{
+        {
+            Name:        "get_current_time",
+            Description: "Returns the current time in RFC3339 format",
+        },
+        {
+            Name:        "calculate",
+            Description: "Performs basic arithmetic operations",
+            Parameters: map[string]any{
+                "type": "object",
+                "properties": map[string]any{
+                    "operation": map[string]any{
+                        "type":        "string",
+                        "description": "The operation to perform: add, subtract, multiply, divide",
+                    },
+                    "a": map[string]any{"type": "number"},
+                    "b": map[string]any{"type": "number"},
+                },
+                "required": []string{"operation", "a", "b"},
+            },
+        },
+    }
+
+    // Define tool handlers
+    handlers := map[string]copilot.ToolHandler{
+        "get_current_time": func(args map[string]any) (string, error) {
+            return time.Now().Format(time.RFC3339), nil
+        },
+        "calculate": func(args map[string]any) (string, error) {
+            op := args["operation"].(string)
+            a := args["a"].(float64)
+            b := args["b"].(float64)
+            
+            var result float64
+            switch op {
+            case "add":
+                result = a + b
+            case "subtract":
+                result = a - b
+            case "multiply":
+                result = a * b
+            case "divide":
+                if b == 0 {
+                    return "", fmt.Errorf("division by zero")
+                }
+                result = a / b
+            default:
+                return "", fmt.Errorf("unknown operation: %s", op)
+            }
+            
+            return fmt.Sprintf("%.2f", result), nil
+        },
+    }
+
+    // Create LLM with tool support
+    llm, err := copilot.New(copilot.Config{
+        Model:        "gpt-4",
+        ToolHandlers: handlers,
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer llm.Close()
+
+    // Make request with tools
+    request := &model.LLMRequest{
+        Contents: []*genai.Content{
+            {
+                Role: "user",
+                Parts: []*genai.Part{
+                    genai.NewPartFromText("What time is it? Also, what's 42 times 1.5?"),
+                },
+            },
+        },
+        Tools: tools,
+    }
+
+    // The SDK automatically handles tool calls
+    for resp, err := range llm.GenerateContent(ctx, request, false) {
+        if err != nil {
+            log.Fatal(err)
+        }
+        if resp.Content != nil {
+            for _, part := range resp.Content.Parts {
+                fmt.Print(part.Text)
+            }
+        }
+    }
+    fmt.Println()
+}
+```
+
+For a complete working example, see [examples/tools/main.go](./examples/tools/main.go).
 
 ## API Compatibility
 

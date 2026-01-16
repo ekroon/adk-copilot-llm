@@ -3,8 +3,9 @@ module github.com/ekroon/adk-copilot-llm
 go 1.24.10
 
 require (
-	google.golang.org/adk v0.1.0
-	google.golang.org/genai v1.35.0
+	github.com/github/copilot-sdk/go v0.0.0-20260116011436-1e235132d7d2
+	google.golang.org/adk v0.3.0
+	google.golang.org/genai v1.40.0
 )
 
 require (
@@ -15,6 +16,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect

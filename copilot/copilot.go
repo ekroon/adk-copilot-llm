@@ -15,6 +15,10 @@ import (
 	"google.golang.org/genai"
 )
 
+// ToolHandler is a function that handles a tool call.
+// It receives the tool arguments as a map and returns the result as a string.
+type ToolHandler func(args map[string]any) (string, error)
+
 // Config holds the configuration for the Copilot LLM.
 type Config struct {
 	// CLIPath is the path to the Copilot CLI executable (default: "copilot" or COPILOT_CLI_PATH env)
@@ -27,6 +31,9 @@ type Config struct {
 	Streaming bool
 	// LogLevel for the copilot client (default: "error")
 	LogLevel string
+	// ToolHandlers maps tool names to their handler functions.
+	// These handlers are invoked when the LLM calls the corresponding tool.
+	ToolHandlers map[string]ToolHandler
 }
 
 // CopilotLLM implements the model.LLM interface for GitHub Copilot.
@@ -127,10 +134,22 @@ func (c *CopilotLLM) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			streaming = true
 		}
 
+		// Convert genai tools to copilot tools
+		var copilotTools []copilot.Tool
+		if req.Config != nil && len(req.Config.Tools) > 0 {
+			var err error
+			copilotTools, err = c.convertTools(req.Config.Tools)
+			if err != nil {
+				yield(nil, fmt.Errorf("failed to convert tools: %w", err))
+				return
+			}
+		}
+
 		// Create a new session for this request
 		session, err := c.client.CreateSession(&copilot.SessionConfig{
 			Model:     modelName,
 			Streaming: streaming,
+			Tools:     copilotTools,
 		})
 		if err != nil {
 			yield(nil, fmt.Errorf("failed to create session: %w", err))
@@ -318,4 +337,169 @@ func convertEventToResponse(event copilot.SessionEvent, partial bool) *model.LLM
 	}
 
 	return resp
+}
+
+// convertTools converts genai tools to copilot tools.
+func (c *CopilotLLM) convertTools(genaiTools []*genai.Tool) ([]copilot.Tool, error) {
+	var copilotTools []copilot.Tool
+
+	for _, genaiTool := range genaiTools {
+		// Only process function declarations
+		if genaiTool.FunctionDeclarations == nil {
+			continue
+		}
+
+		for _, funcDecl := range genaiTool.FunctionDeclarations {
+			// Check if handler exists
+			handler, ok := c.config.ToolHandlers[funcDecl.Name]
+			if !ok {
+				return nil, fmt.Errorf("no handler found for tool: %s", funcDecl.Name)
+			}
+
+			// Convert genai schema to map[string]interface{} for copilot
+			var parameters map[string]interface{}
+			if funcDecl.Parameters != nil {
+				parameters = schemaToMap(funcDecl.Parameters)
+			}
+
+			// Create copilot tool with a handler wrapper
+			// Capture handler in a local variable to avoid closure issues
+			h := handler
+			copilotTool := copilot.Tool{
+				Name:        funcDecl.Name,
+				Description: funcDecl.Description,
+				Parameters:  parameters,
+				Handler: func(invocation copilot.ToolInvocation) (copilot.ToolResult, error) {
+					// Extract arguments as map[string]any
+					args, ok := invocation.Arguments.(map[string]any)
+					if !ok {
+						return copilot.ToolResult{
+							Error: fmt.Sprintf("invalid arguments type: expected map[string]any, got %T", invocation.Arguments),
+						}, nil
+					}
+
+					// Call the registered handler
+					result, err := h(args)
+					if err != nil {
+						return copilot.ToolResult{
+							Error: err.Error(),
+						}, nil
+					}
+
+					// Return successful result
+					return copilot.ToolResult{
+						TextResultForLLM: result,
+					}, nil
+				},
+			}
+
+			copilotTools = append(copilotTools, copilotTool)
+		}
+	}
+
+	return copilotTools, nil
+}
+
+// schemaToMap converts a genai.Schema to a map[string]interface{} for copilot tools.
+func schemaToMap(schema *genai.Schema) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+
+	result := make(map[string]interface{})
+
+	// Type
+	if schema.Type != "" {
+		result["type"] = strings.ToLower(string(schema.Type))
+	}
+
+	// Description
+	if schema.Description != "" {
+		result["description"] = schema.Description
+	}
+
+	// Properties (for object type)
+	if len(schema.Properties) > 0 {
+		props := make(map[string]interface{})
+		for name, propSchema := range schema.Properties {
+			props[name] = schemaToMap(propSchema)
+		}
+		result["properties"] = props
+	}
+
+	// Required fields
+	if len(schema.Required) > 0 {
+		result["required"] = schema.Required
+	}
+
+	// Items (for array type)
+	if schema.Items != nil {
+		result["items"] = schemaToMap(schema.Items)
+	}
+
+	// Enum
+	if len(schema.Enum) > 0 {
+		result["enum"] = schema.Enum
+	}
+
+	// Format
+	if schema.Format != "" {
+		result["format"] = schema.Format
+	}
+
+	// Numeric constraints
+	if schema.Minimum != nil {
+		result["minimum"] = *schema.Minimum
+	}
+	if schema.Maximum != nil {
+		result["maximum"] = *schema.Maximum
+	}
+
+	// String constraints
+	if schema.MinLength != nil {
+		result["minLength"] = *schema.MinLength
+	}
+	if schema.MaxLength != nil {
+		result["maxLength"] = *schema.MaxLength
+	}
+	if schema.Pattern != "" {
+		result["pattern"] = schema.Pattern
+	}
+
+	// Array constraints
+	if schema.MinItems != nil {
+		result["minItems"] = *schema.MinItems
+	}
+	if schema.MaxItems != nil {
+		result["maxItems"] = *schema.MaxItems
+	}
+
+	// Object constraints
+	if schema.MinProperties != nil {
+		result["minProperties"] = *schema.MinProperties
+	}
+	if schema.MaxProperties != nil {
+		result["maxProperties"] = *schema.MaxProperties
+	}
+
+	// Nullable
+	if schema.Nullable != nil {
+		result["nullable"] = *schema.Nullable
+	}
+
+	// Default value
+	if schema.Default != nil {
+		result["default"] = schema.Default
+	}
+
+	// AnyOf
+	if len(schema.AnyOf) > 0 {
+		anyOf := make([]interface{}, len(schema.AnyOf))
+		for i, s := range schema.AnyOf {
+			anyOf[i] = schemaToMap(s)
+		}
+		result["anyOf"] = anyOf
+	}
+
+	return result
 }
