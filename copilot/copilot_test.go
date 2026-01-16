@@ -1,339 +1,427 @@
 package copilot
 
 import (
-	"context"
+	"os"
 	"testing"
-	"time"
 
-	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
 
 func TestNew(t *testing.T) {
-	t.Run("missing token", func(t *testing.T) {
-		_, err := New(Config{})
-		if err == nil {
-			t.Error("expected error when GitHubToken is empty")
-		}
-	})
+	t.Run("default values", func(t *testing.T) {
+		// Clear env var to test default
+		originalEnv := os.Getenv("COPILOT_CLI_PATH")
+		os.Unsetenv("COPILOT_CLI_PATH")
+		defer func() {
+			if originalEnv != "" {
+				os.Setenv("COPILOT_CLI_PATH", originalEnv)
+			}
+		}()
 
-	t.Run("valid config", func(t *testing.T) {
-		llm, err := New(Config{
-			GitHubToken: "test-token",
-		})
+		llm, err := New(Config{})
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if llm.Name() != "github-copilot" {
-			t.Errorf("expected name 'github-copilot', got %q", llm.Name())
-		}
+
 		if llm.config.Model != "gpt-4" {
 			t.Errorf("expected default model 'gpt-4', got %q", llm.config.Model)
 		}
+		if llm.config.LogLevel != "error" {
+			t.Errorf("expected default log level 'error', got %q", llm.config.LogLevel)
+		}
+		if llm.config.CLIPath != "copilot" {
+			t.Errorf("expected default CLIPath 'copilot', got %q", llm.config.CLIPath)
+		}
 	})
 
-	t.Run("enterprise config", func(t *testing.T) {
-		llm, err := New(Config{
-			GitHubToken:   "test-token",
-			EnterpriseURL: "company.ghe.com",
-		})
+	t.Run("COPILOT_CLI_PATH env var", func(t *testing.T) {
+		originalEnv := os.Getenv("COPILOT_CLI_PATH")
+		os.Setenv("COPILOT_CLI_PATH", "/custom/path/copilot")
+		defer func() {
+			if originalEnv != "" {
+				os.Setenv("COPILOT_CLI_PATH", originalEnv)
+			} else {
+				os.Unsetenv("COPILOT_CLI_PATH")
+			}
+		}()
+
+		llm, err := New(Config{})
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		expectedBaseURL := "https://copilot-api.company.ghe.com"
-		if llm.baseURL != expectedBaseURL {
-			t.Errorf("expected baseURL %q, got %q", expectedBaseURL, llm.baseURL)
+
+		if llm.config.CLIPath != "/custom/path/copilot" {
+			t.Errorf("expected CLIPath from env '/custom/path/copilot', got %q", llm.config.CLIPath)
 		}
 	})
 
 	t.Run("custom model", func(t *testing.T) {
 		llm, err := New(Config{
-			GitHubToken: "test-token",
-			Model:       "gpt-3.5-turbo",
+			Model: "gpt-3.5-turbo",
 		})
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
+
 		if llm.config.Model != "gpt-3.5-turbo" {
 			t.Errorf("expected model 'gpt-3.5-turbo', got %q", llm.config.Model)
 		}
 	})
+
+	t.Run("custom CLIPath overrides env", func(t *testing.T) {
+		originalEnv := os.Getenv("COPILOT_CLI_PATH")
+		os.Setenv("COPILOT_CLI_PATH", "/env/path/copilot")
+		defer func() {
+			if originalEnv != "" {
+				os.Setenv("COPILOT_CLI_PATH", originalEnv)
+			} else {
+				os.Unsetenv("COPILOT_CLI_PATH")
+			}
+		}()
+
+		llm, err := New(Config{
+			CLIPath: "/explicit/path/copilot",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if llm.config.CLIPath != "/explicit/path/copilot" {
+			t.Errorf("expected CLIPath '/explicit/path/copilot', got %q", llm.config.CLIPath)
+		}
+	})
+
+	t.Run("custom log level", func(t *testing.T) {
+		llm, err := New(Config{
+			LogLevel: "debug",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if llm.config.LogLevel != "debug" {
+			t.Errorf("expected log level 'debug', got %q", llm.config.LogLevel)
+		}
+	})
+
+	t.Run("streaming config", func(t *testing.T) {
+		llm, err := New(Config{
+			Streaming: true,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !llm.config.Streaming {
+			t.Error("expected streaming to be true")
+		}
+	})
+
+	t.Run("client not started initially", func(t *testing.T) {
+		llm, err := New(Config{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if llm.started {
+			t.Error("expected client to not be started initially")
+		}
+		if llm.client == nil {
+			t.Error("expected client to be created")
+		}
+	})
 }
 
-func TestConvertRequest(t *testing.T) {
-	llm := &CopilotLLM{}
+func TestName(t *testing.T) {
+	llm, err := New(Config{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if llm.Name() != "github-copilot" {
+		t.Errorf("expected name 'github-copilot', got %q", llm.Name())
+	}
+}
+
+func TestFormatPrompt(t *testing.T) {
+	t.Run("empty contents", func(t *testing.T) {
+		result := formatPrompt(nil)
+		if result != "" {
+			t.Errorf("expected empty string for nil contents, got %q", result)
+		}
+
+		result = formatPrompt([]*genai.Content{})
+		if result != "" {
+			t.Errorf("expected empty string for empty contents, got %q", result)
+		}
+	})
+
+	t.Run("single content", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Hello, world!")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		if result != "Hello, world!" {
+			t.Errorf("expected 'Hello, world!', got %q", result)
+		}
+	})
+
+	t.Run("multi-turn conversation with user", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Hello")},
+			},
+			{
+				Role:  "model",
+				Parts: []*genai.Part{genai.NewPartFromText("Hi there!")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "User: Hello\n\nAssistant: Hi there!"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("model role mapped to Assistant", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Question")},
+			},
+			{
+				Role:  "model",
+				Parts: []*genai.Part{genai.NewPartFromText("Answer")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "User: Question\n\nAssistant: Answer"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("assistant role", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Question")},
+			},
+			{
+				Role:  "assistant",
+				Parts: []*genai.Part{genai.NewPartFromText("Answer")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "User: Question\n\nAssistant: Answer"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("system role", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "system",
+				Parts: []*genai.Part{genai.NewPartFromText("You are helpful")},
+			},
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Hello")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "System: You are helpful\n\nUser: Hello"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("unknown role uses role name", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "custom",
+				Parts: []*genai.Part{genai.NewPartFromText("Custom message")},
+			},
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Hello")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "custom: Custom message\n\nUser: Hello"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("skips empty content", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Hello")},
+			},
+			{
+				Role:  "model",
+				Parts: []*genai.Part{}, // Empty parts
+			},
+			{
+				Role:  "user",
+				Parts: []*genai.Part{genai.NewPartFromText("Follow up")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "User: Hello\n\nUser: Follow up"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("case insensitive roles", func(t *testing.T) {
+		contents := []*genai.Content{
+			{
+				Role:  "USER",
+				Parts: []*genai.Part{genai.NewPartFromText("Hello")},
+			},
+			{
+				Role:  "MODEL",
+				Parts: []*genai.Part{genai.NewPartFromText("Hi")},
+			},
+		}
+
+		result := formatPrompt(contents)
+		expected := "User: Hello\n\nAssistant: Hi"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+}
+
+func TestExtractText(t *testing.T) {
+	t.Run("nil content", func(t *testing.T) {
+		result := extractText(nil)
+		if result != "" {
+			t.Errorf("expected empty string for nil content, got %q", result)
+		}
+	})
+
+	t.Run("empty parts", func(t *testing.T) {
+		content := &genai.Content{
+			Role:  "user",
+			Parts: []*genai.Part{},
+		}
+
+		result := extractText(content)
+		if result != "" {
+			t.Errorf("expected empty string for empty parts, got %q", result)
+		}
+	})
+
+	t.Run("nil parts", func(t *testing.T) {
+		content := &genai.Content{
+			Role:  "user",
+			Parts: nil,
+		}
+
+		result := extractText(content)
+		if result != "" {
+			t.Errorf("expected empty string for nil parts, got %q", result)
+		}
+	})
 
 	t.Run("single text part", func(t *testing.T) {
-		req := &model.LLMRequest{
-			Contents: []*genai.Content{
-				{
-					Role:  "user",
-					Parts: []*genai.Part{genai.NewPartFromText("Hello")},
-				},
-			},
+		content := &genai.Content{
+			Role:  "user",
+			Parts: []*genai.Part{genai.NewPartFromText("Hello, world!")},
 		}
 
-		chatReq, err := llm.convertRequest(req)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if len(chatReq.Messages) != 1 {
-			t.Errorf("expected 1 message, got %d", len(chatReq.Messages))
-		}
-		if chatReq.Messages[0].Content != "Hello" {
-			t.Errorf("expected content 'Hello', got %q", chatReq.Messages[0].Content)
-		}
-		if chatReq.Messages[0].Role != "user" {
-			t.Errorf("expected role 'user', got %q", chatReq.Messages[0].Role)
+		result := extractText(content)
+		if result != "Hello, world!" {
+			t.Errorf("expected 'Hello, world!', got %q", result)
 		}
 	})
 
-	t.Run("multiple contents", func(t *testing.T) {
-		req := &model.LLMRequest{
-			Contents: []*genai.Content{
-				{
-					Role:  "user",
-					Parts: []*genai.Part{genai.NewPartFromText("Hello")},
-				},
-				{
-					Role:  "model",
-					Parts: []*genai.Part{genai.NewPartFromText("Hi there!")},
-				},
-			},
-		}
-
-		chatReq, err := llm.convertRequest(req)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if len(chatReq.Messages) != 2 {
-			t.Errorf("expected 2 messages, got %d", len(chatReq.Messages))
-		}
-	})
-
-	t.Run("with config", func(t *testing.T) {
-		temp := float32(0.8)
-		topP := float32(0.9)
-		maxTokens := int32(100)
-
-		req := &model.LLMRequest{
-			Contents: []*genai.Content{
-				{
-					Role:  "user",
-					Parts: []*genai.Part{genai.NewPartFromText("Hello")},
-				},
-			},
-			Config: &genai.GenerateContentConfig{
-				Temperature:     &temp,
-				TopP:            &topP,
-				MaxOutputTokens: maxTokens,
-			},
-		}
-
-		chatReq, err := llm.convertRequest(req)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if chatReq.Temperature == nil {
-			t.Error("expected temperature to be set")
-		} else {
-			diff := *chatReq.Temperature - 0.8
-			if diff < -0.001 || diff > 0.001 {
-				t.Errorf("expected temperature 0.8, got %f", *chatReq.Temperature)
-			}
-		}
-		if chatReq.TopP == nil {
-			t.Error("expected topP to be set")
-		} else {
-			diff := *chatReq.TopP - 0.9
-			if diff < -0.001 || diff > 0.001 {
-				t.Errorf("expected topP 0.9, got %f", *chatReq.TopP)
-			}
-		}
-		if chatReq.MaxTokens == nil {
-			t.Error("expected maxTokens to be set")
-		} else if *chatReq.MaxTokens != 100 {
-			t.Errorf("expected maxTokens 100, got %d", *chatReq.MaxTokens)
-		}
-	})
-}
-
-func TestMapFinishReason(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected genai.FinishReason
-	}{
-		{"stop", genai.FinishReasonStop},
-		{"length", genai.FinishReasonMaxTokens},
-		{"content_filter", genai.FinishReasonSafety},
-		{"unknown", genai.FinishReasonOther},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := mapFinishReason(tt.input)
-			if result != tt.expected {
-				t.Errorf("mapFinishReason(%q) = %v; want %v", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestIsPAT(t *testing.T) {
-	tests := []struct {
-		name     string
-		token    string
-		expected bool
-	}{
-		{
-			name:     "valid PAT token",
-			token:    "github_pat_1234567890abcdef",
-			expected: true,
-		},
-		{
-			name:     "OAuth token",
-			token:    "gho_1234567890abcdef",
-			expected: false,
-		},
-		{
-			name:     "empty token",
-			token:    "",
-			expected: false,
-		},
-		{
-			name:     "random string",
-			token:    "random_token_string",
-			expected: false,
-		},
-		{
-			name:     "prefix without underscore",
-			token:    "github_pat",
-			expected: false,
-		},
-		{
-			name:     "PAT prefix in middle",
-			token:    "prefix_github_pat_suffix",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isPAT(tt.token)
-			if result != tt.expected {
-				t.Errorf("isPAT(%q) = %v; want %v", tt.token, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestEnsureAPIKeyWithPAT(t *testing.T) {
-	t.Run("PAT token used directly", func(t *testing.T) {
-		patToken := "github_pat_1234567890abcdef"
-		llm, err := New(Config{
-			GitHubToken: patToken,
-		})
-		if err != nil {
-			t.Fatalf("failed to create LLM: %v", err)
-		}
-
-		ctx := context.Background()
-		err = llm.ensureAPIKey(ctx)
-		if err != nil {
-			t.Errorf("ensureAPIKey failed: %v", err)
-		}
-
-		// Verify PAT was set directly
-		llm.mu.RLock()
-		apiKey := llm.copilotAPIKey
-		expiresAt := llm.apiKeyExpiresAt
-		llm.mu.RUnlock()
-
-		if apiKey != patToken {
-			t.Errorf("expected copilotAPIKey to be PAT token %q, got %q", patToken, apiKey)
-		}
-
-		// Verify expiration is far in the future (at least 5 years)
-		fiveYearsFromNow := time.Now().Add(5 * 365 * 24 * time.Hour)
-		if expiresAt.Before(fiveYearsFromNow) {
-			t.Errorf("expected expiration to be far in future, got %v", expiresAt)
-		}
-	})
-
-	t.Run("PAT token cached on subsequent calls", func(t *testing.T) {
-		patToken := "github_pat_cached_test"
-		llm, err := New(Config{
-			GitHubToken: patToken,
-		})
-		if err != nil {
-			t.Fatalf("failed to create LLM: %v", err)
-		}
-
-		ctx := context.Background()
-
-		// First call
-		err = llm.ensureAPIKey(ctx)
-		if err != nil {
-			t.Errorf("first ensureAPIKey call failed: %v", err)
-		}
-
-		llm.mu.RLock()
-		firstAPIKey := llm.copilotAPIKey
-		firstExpiry := llm.apiKeyExpiresAt
-		llm.mu.RUnlock()
-
-		// Second call - should use cached key
-		err = llm.ensureAPIKey(ctx)
-		if err != nil {
-			t.Errorf("second ensureAPIKey call failed: %v", err)
-		}
-
-		llm.mu.RLock()
-		secondAPIKey := llm.copilotAPIKey
-		secondExpiry := llm.apiKeyExpiresAt
-		llm.mu.RUnlock()
-
-		if firstAPIKey != secondAPIKey {
-			t.Errorf("API key changed between calls: %q != %q", firstAPIKey, secondAPIKey)
-		}
-
-		if firstExpiry != secondExpiry {
-			t.Errorf("expiration changed between calls: %v != %v", firstExpiry, secondExpiry)
-		}
-	})
-}
-
-func TestChatMessageMarshalJSON(t *testing.T) {
-	t.Run("string content", func(t *testing.T) {
-		msg := chatMessage{
-			Role:    "user",
-			Content: "Hello",
-		}
-		data, err := msg.MarshalJSON()
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		expected := `{"role":"user","content":"Hello"}`
-		if string(data) != expected {
-			t.Errorf("expected %q, got %q", expected, string(data))
-		}
-	})
-
-	t.Run("array content", func(t *testing.T) {
-		msg := chatMessage{
+	t.Run("multiple text parts", func(t *testing.T) {
+		content := &genai.Content{
 			Role: "user",
-			ContentParts: []map[string]interface{}{
-				{"type": "text", "text": "Hello"},
+			Parts: []*genai.Part{
+				genai.NewPartFromText("First part"),
+				genai.NewPartFromText("Second part"),
 			},
 		}
-		data, err := msg.MarshalJSON()
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+
+		result := extractText(content)
+		expected := "First part\nSecond part"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
 		}
-		// Just check it doesn't error and contains expected fields
-		str := string(data)
-		if str == "" {
-			t.Error("expected non-empty JSON")
+	})
+
+	t.Run("parts with empty text skipped", func(t *testing.T) {
+		content := &genai.Content{
+			Role: "user",
+			Parts: []*genai.Part{
+				genai.NewPartFromText("First"),
+				genai.NewPartFromText(""),
+				genai.NewPartFromText("Third"),
+			},
+		}
+
+		result := extractText(content)
+		expected := "First\nThird"
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+}
+
+func TestClose(t *testing.T) {
+	t.Run("close unstarted client", func(t *testing.T) {
+		llm, err := New(Config{})
+		if err != nil {
+			t.Fatalf("unexpected error creating LLM: %v", err)
+		}
+
+		// Ensure client is not started
+		if llm.started {
+			t.Fatal("expected client to not be started")
+		}
+
+		// Close should not error on unstarted client
+		err = llm.Close()
+		if err != nil {
+			t.Errorf("unexpected error closing unstarted client: %v", err)
+		}
+
+		// Verify started is still false
+		if llm.started {
+			t.Error("expected started to remain false after closing unstarted client")
+		}
+	})
+
+	t.Run("close is idempotent", func(t *testing.T) {
+		llm, err := New(Config{})
+		if err != nil {
+			t.Fatalf("unexpected error creating LLM: %v", err)
+		}
+
+		// Close multiple times should not error
+		for i := 0; i < 3; i++ {
+			err = llm.Close()
+			if err != nil {
+				t.Errorf("unexpected error on close attempt %d: %v", i+1, err)
+			}
 		}
 	})
 }

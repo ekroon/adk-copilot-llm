@@ -1,10 +1,21 @@
+// Package main demonstrates the usage of the adk-copilot-llm package
+// which provides an implementation of the adk-go LLM interface for GitHub Copilot.
+//
+// This example shows:
+// - Creating a CopilotLLM with minimal configuration
+// - Non-streaming requests
+// - Streaming requests
+// - Multi-turn conversations
+//
+// Prerequisites:
+// - The Copilot CLI must be installed and available in PATH (or set COPILOT_CLI_PATH)
+// - You must be authenticated with GitHub Copilot (the CLI handles this automatically)
 package main
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/ekroon/adk-copilot-llm/copilot"
 	"google.golang.org/adk/model"
@@ -14,45 +25,29 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Option 1: Use existing GitHub token from environment
-	token := os.Getenv("GITHUB_TOKEN")
-
-	// Option 2: If no token, perform device flow authentication
-	if token == "" {
-		fmt.Println("No GITHUB_TOKEN found, starting device flow authentication...")
-		auth := copilot.NewAuthenticator(copilot.AuthConfig{})
-		var err error
-		token, err = auth.Authenticate(ctx)
-		if err != nil {
-			log.Fatalf("Authentication failed: %v", err)
-		}
-		fmt.Printf("\nYou can set this token as GITHUB_TOKEN environment variable for future use.\n\n")
-	} else {
-		// Detect token type
-		if len(token) >= 11 && token[:11] == "github_pat_" {
-			fmt.Println("Detected GitHub Personal Access Token (PAT) - will use directly")
-		} else {
-			fmt.Println("Detected OAuth token - will exchange for Copilot API key")
-		}
-	}
-
-	// Create Copilot LLM instance
+	// =========================================================================
+	// Create the CopilotLLM instance
+	// =========================================================================
+	// The copilot CLI handles all authentication automatically.
+	// Only the model needs to be specified; other options have sensible defaults.
 	llm, err := copilot.New(copilot.Config{
-		GitHubToken: token,
-		Model:       "gpt-4", // or "gpt-3.5-turbo"
+		Model: "gpt-4", // or "gpt-3.5-turbo", "claude-3.5-sonnet", etc.
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Copilot LLM: %v", err)
 	}
+	defer llm.Close() // Ensure proper cleanup when done
 
 	fmt.Printf("Using LLM: %s\n\n", llm.Name())
 
+	// =========================================================================
 	// Example 1: Non-streaming request
+	// =========================================================================
+	// A simple question-and-answer with the complete response returned at once.
 	fmt.Println("Example 1: Non-streaming request")
-	fmt.Println("==================================")
+	fmt.Println("=================================")
 
 	request := &model.LLMRequest{
-		Model: "gpt-4",
 		Contents: []*genai.Content{
 			{
 				Role:  "user",
@@ -61,6 +56,7 @@ func main() {
 		},
 	}
 
+	// Iterate over responses (non-streaming returns one complete response)
 	for resp, err := range llm.GenerateContent(ctx, request, false) {
 		if err != nil {
 			log.Fatalf("Error generating content: %v", err)
@@ -72,14 +68,16 @@ func main() {
 		}
 	}
 	fmt.Println()
-	fmt.Println()
 
+	// =========================================================================
 	// Example 2: Streaming request
+	// =========================================================================
+	// Streaming returns partial responses as they are generated,
+	// allowing for real-time display of content.
 	fmt.Println("Example 2: Streaming request")
-	fmt.Println("=============================")
+	fmt.Println("============================")
 
 	streamRequest := &model.LLMRequest{
-		Model: "gpt-4",
 		Contents: []*genai.Content{
 			{
 				Role:  "user",
@@ -88,28 +86,33 @@ func main() {
 		},
 	}
 
+	// Iterate over streaming responses - chunks arrive as they're generated
 	for resp, err := range llm.GenerateContent(ctx, streamRequest, true) {
 		if err != nil {
 			log.Fatalf("Error generating content: %v", err)
 		}
+		// Print each chunk as it arrives
 		if resp.Content != nil && len(resp.Content.Parts) > 0 {
 			for _, part := range resp.Content.Parts {
 				fmt.Print(part.Text)
 			}
 		}
+		// TurnComplete signals the end of the response
 		if resp.TurnComplete {
 			break
 		}
 	}
 	fmt.Println()
-	fmt.Println()
 
+	// =========================================================================
 	// Example 3: Multi-turn conversation
+	// =========================================================================
+	// Demonstrates context preservation across multiple turns.
+	// The conversation history is passed in the Contents array.
 	fmt.Println("Example 3: Multi-turn conversation")
 	fmt.Println("===================================")
 
 	conversationRequest := &model.LLMRequest{
-		Model: "gpt-4",
 		Contents: []*genai.Content{
 			{
 				Role:  "user",
@@ -126,6 +129,7 @@ func main() {
 		},
 	}
 
+	// The model should remember "Alice" from the conversation history
 	for resp, err := range llm.GenerateContent(ctx, conversationRequest, false) {
 		if err != nil {
 			log.Fatalf("Error generating content: %v", err)
@@ -137,5 +141,6 @@ func main() {
 		}
 	}
 	fmt.Println()
-	fmt.Println()
+
+	fmt.Println("All examples completed successfully!")
 }

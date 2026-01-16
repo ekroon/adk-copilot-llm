@@ -4,14 +4,11 @@ A Go module that implements the [adk-go](https://github.com/google/adk-go) LLM i
 
 ## Features
 
-- ✅ Implements the `model.LLM` interface from adk-go
-- ✅ Multiple authentication methods (PAT and OAuth device flow)
-- ✅ GitHub Personal Access Token (PAT) support for direct usage
-- ✅ Token management with automatic refresh
-- ✅ Streaming and non-streaming content generation
-- ✅ Support for GitHub Enterprise
-- ✅ Multi-turn conversations
-- ✅ OpenAI-compatible chat completions API
+- Implements the `model.LLM` interface from adk-go
+- Streaming and non-streaming content generation
+- Multi-turn conversations
+- Simple setup - authentication handled by Copilot CLI
+- OpenAI-compatible chat completions API
 
 ## Installation
 
@@ -24,18 +21,29 @@ go get github.com/ekroon/adk-copilot-llm
 - Go 1.24 or later
 - A GitHub account with access to Copilot
 - Active GitHub Copilot subscription
+- **GitHub Copilot CLI installed and authenticated**
+
+### Installing the Copilot CLI
+
+The Copilot CLI handles all authentication automatically. Install it following the [official instructions](https://docs.github.com/en/copilot/github-copilot-in-the-cli).
+
+Once installed, authenticate with:
+
+```bash
+gh auth login
+gh extension install github/gh-copilot
+```
+
+You can also set the `COPILOT_CLI_PATH` environment variable if the CLI is installed in a non-standard location.
 
 ## Quick Start
 
-### Option 1: Using GitHub Personal Access Token (Recommended)
-
-GitHub Personal Access Tokens (starting with `github_pat_`) are used directly without token exchange, providing simpler authentication:
-
 ```go
 package main
 
 import (
     "context"
+    "fmt"
     "log"
 
     "github.com/ekroon/adk-copilot-llm/copilot"
@@ -45,127 +53,39 @@ import (
 
 func main() {
     ctx := context.Background()
-
-    // Create Copilot LLM instance with PAT token
-    // PAT tokens are used directly without exchange
-    llm, err := copilot.New(copilot.Config{
-        GitHubToken: "github_pat_YOUR_TOKEN_HERE",
-        Model:       "gpt-4",
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Create a request
-    request := &model.LLMRequest{
-        Contents: []*genai.Content{
-            {
-                Role:  "user",
-                Parts: []*genai.Part{genai.NewPartFromText("Hello!")},
-            },
-        },
-    }
-
-    // Generate content
-    for resp, err := range llm.GenerateContent(ctx, request, false) {
-        if err != nil {
-            log.Fatal(err)
-        }
-        if resp.Content != nil {
-            for _, part := range resp.Content.Parts {
-                log.Printf("%s", part.Text)
-            }
-        }
-    }
-}
-```
-
-### Option 2: Using Environment Variable
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-    "os"
-
-    "github.com/ekroon/adk-copilot-llm/copilot"
-    "google.golang.org/adk/model"
-    "google.golang.org/genai"
-)
-
-func main() {
-    ctx := context.Background()
-
-    // Create Copilot LLM instance with token from environment
-    // Supports both PAT tokens (github_pat_*) and OAuth tokens
-    llm, err := copilot.New(copilot.Config{
-        GitHubToken: os.Getenv("GITHUB_TOKEN"),
-        Model:       "gpt-4",
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Create a request
-    request := &model.LLMRequest{
-        Contents: []*genai.Content{
-            {
-                Role:  "user",
-                Parts: []*genai.Part{genai.NewPartFromText("Hello!")},
-            },
-        },
-    }
-
-    // Generate content
-    for resp, err := range llm.GenerateContent(ctx, request, false) {
-        if err != nil {
-            log.Fatal(err)
-        }
-        if resp.Content != nil {
-            for _, part := range resp.Content.Parts {
-                log.Printf("%s", part.Text)
-            }
-        }
-    }
-}
-```
-
-### Option 3: OAuth Device Flow Authentication
-
-For OAuth-based authentication that exchanges tokens for Copilot API keys:
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-
-    "github.com/ekroon/adk-copilot-llm/copilot"
-)
-
-func main() {
-    ctx := context.Background()
-
-    // Start device flow authentication
-    auth := copilot.NewAuthenticator(copilot.AuthConfig{})
-    token, err := auth.Authenticate(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
 
     // Create Copilot LLM instance
+    // Authentication is handled automatically by the Copilot CLI
     llm, err := copilot.New(copilot.Config{
-        GitHubToken: token,
-        Model:       "gpt-4",
+        Model: "gpt-4",
     })
     if err != nil {
         log.Fatal(err)
     }
+    defer llm.Close()
 
-    // Use the LLM...
+    // Create a request
+    request := &model.LLMRequest{
+        Contents: []*genai.Content{
+            {
+                Role:  "user",
+                Parts: []*genai.Part{genai.NewPartFromText("Hello!")},
+            },
+        },
+    }
+
+    // Generate content
+    for resp, err := range llm.GenerateContent(ctx, request, false) {
+        if err != nil {
+            log.Fatal(err)
+        }
+        if resp.Content != nil {
+            for _, part := range resp.Content.Parts {
+                fmt.Print(part.Text)
+            }
+        }
+    }
+    fmt.Println()
 }
 ```
 
@@ -175,89 +95,34 @@ The `Config` struct supports the following options:
 
 ```go
 type Config struct {
-    // GitHubToken is the GitHub token for authentication (required)
-    // Supports two types:
-    // - Personal Access Token (PAT): Tokens starting with "github_pat_"
-    //   are used directly without token exchange
-    // - OAuth Access Token: Regular OAuth tokens that will be exchanged
-    //   for Copilot API keys through the token exchange API
-    GitHubToken string
-    
-    // EnterpriseURL is the optional GitHub Enterprise URL
-    // Example: "company.ghe.com" or "https://company.ghe.com"
-    EnterpriseURL string
-    
-    // Model is the model identifier to use (default: "gpt-4")
-    // Options: "gpt-4", "gpt-3.5-turbo"
+    // CLIPath is the path to the Copilot CLI executable
+    // Default: "copilot" (or COPILOT_CLI_PATH environment variable)
+    CLIPath string
+
+    // CLIUrl is the URL of an existing CLI server (optional)
+    // If provided, connects to an existing server instead of starting a new one
+    CLIUrl string
+
+    // Model is the model identifier to use
+    // Default: "gpt-4"
     Model string
-    
-    // HTTPClient is an optional custom HTTP client
-    HTTPClient *http.Client
+
+    // Streaming enables streaming responses by default
+    Streaming bool
+
+    // LogLevel sets the logging verbosity
+    // Default: "error"
+    LogLevel string
 }
 ```
 
-## Authentication Methods
+### Environment Variables
 
-This library supports two authentication methods:
-
-### 1. GitHub Personal Access Token (PAT)
-
-Personal Access Tokens (starting with `github_pat_`) are the simplest authentication method. They are used directly without token exchange:
-
-```go
-llm, err := copilot.New(copilot.Config{
-    GitHubToken: "github_pat_YOUR_TOKEN_HERE",
-    Model:       "gpt-4",
-})
-```
-
-**Advantages:**
-- No token exchange API calls needed
-- Simpler setup
-- Direct usage
-
-### 2. OAuth Token Exchange
-
-OAuth tokens obtained through the device flow are exchanged for Copilot API keys:
-
-```go
-auth := copilot.NewAuthenticator(copilot.AuthConfig{})
-token, err := auth.Authenticate(ctx)
-
-llm, err := copilot.New(copilot.Config{
-    GitHubToken: token,
-    Model:       "gpt-4",
-})
-```
-
-**Advantages:**
-- Standard OAuth flow
-- Automatic token refresh
-
-## GitHub Enterprise Support
-
-To use with GitHub Enterprise:
-
-```go
-llm, err := copilot.New(copilot.Config{
-    GitHubToken:   token,
-    EnterpriseURL: "company.ghe.com",
-    Model:         "gpt-4",
-})
-```
-
-For authentication with GitHub Enterprise:
-
-```go
-auth := copilot.NewAuthenticator(copilot.AuthConfig{
-    EnterpriseURL: "company.ghe.com",
-})
-token, err := auth.Authenticate(ctx)
-```
+- `COPILOT_CLI_PATH`: Path to the Copilot CLI executable (overrides default)
 
 ## Streaming
 
-The implementation supports streaming responses:
+The implementation supports streaming responses for real-time output:
 
 ```go
 // Enable streaming with the third parameter
@@ -267,7 +132,7 @@ for resp, err := range llm.GenerateContent(ctx, request, true) {
     }
     if resp.Content != nil {
         for _, part := range resp.Content.Parts {
-            fmt.Print(part.Text)
+            fmt.Print(part.Text) // Print as tokens arrive
         }
     }
     if resp.TurnComplete {
@@ -276,26 +141,41 @@ for resp, err := range llm.GenerateContent(ctx, request, true) {
 }
 ```
 
+## Multi-turn Conversations
+
+Build conversations with multiple turns:
+
+```go
+conversation := &model.LLMRequest{
+    Contents: []*genai.Content{
+        {
+            Role:  "user",
+            Parts: []*genai.Part{genai.NewPartFromText("My favorite color is blue")},
+        },
+        {
+            Role:  "model",
+            Parts: []*genai.Part{genai.NewPartFromText("That's nice! Blue is a calming color.")},
+        },
+        {
+            Role:  "user",
+            Parts: []*genai.Part{genai.NewPartFromText("What was my favorite color?")},
+        },
+    },
+}
+
+for resp, err := range llm.GenerateContent(ctx, conversation, false) {
+    // Handle response...
+}
+```
+
 ## Examples
 
 See the [examples](./examples) directory for complete working examples:
 
 ```bash
-# Run the example
 cd examples
-GITHUB_TOKEN=your_token_here go run main.go
+go run main.go
 ```
-
-If you don't have a token, the example will guide you through the device flow authentication.
-
-## Authentication Flow
-
-The authentication flow is based on OAuth device flow:
-
-1. **Request Device Code**: The library requests a device code from GitHub
-2. **User Authorization**: User visits the verification URL and enters the user code
-3. **Token Polling**: The library polls for the access token
-4. **Token Refresh**: Copilot API tokens are automatically refreshed as needed
 
 ## API Compatibility
 
@@ -306,6 +186,16 @@ type LLM interface {
     Name() string
     GenerateContent(ctx context.Context, req *LLMRequest, stream bool) iter.Seq2[*LLMResponse, error]
 }
+```
+
+Remember to call `Close()` when done to clean up CLI resources:
+
+```go
+llm, err := copilot.New(config)
+if err != nil {
+    log.Fatal(err)
+}
+defer llm.Close()
 ```
 
 ## License
@@ -319,5 +209,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## References
 
 - [adk-go](https://github.com/google/adk-go) - Agent Development Kit for Go
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) - CLI installation and setup
+- [copilot-sdk](https://github.com/github/copilot-sdk) - Official Copilot SDK
 - [GitHub Copilot API](https://docs.github.com/en/copilot)
-- [OpenCode Copilot Auth Example](https://github.com/sst/opencode-copilot-auth)
