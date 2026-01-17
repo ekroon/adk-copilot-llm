@@ -1,20 +1,16 @@
-// Package main demonstrates the usage of tool support in the adk-copilot-llm package.
+// Package main demonstrates the usage of tool support in the adk-copilot-llm package
+// using the new ADK tool.Tool interface with functiontool.New.
 //
 // This example shows:
-// - Defining a calculator tool using genai.Tool with FunctionDeclarations
+// - Defining tools using functiontool.New with typed input/output structs
+// - Using JSON schema tags for automatic schema generation
 // - Supporting multiple operations: add, subtract, multiply, divide
-// - Creating a tool handler function that performs calculations
-// - Registering the handler in copilot.Config.ToolHandlers
-// - Making a request that triggers the tool
-// - Displaying the LLM's response with the calculated result
+// - Error handling (e.g., division by zero)
+// - Multiple calculation examples with both streaming and non-streaming requests
 //
 // Prerequisites:
 // - The Copilot CLI must be installed and available in PATH (or set COPILOT_CLI_PATH)
 // - You must be authenticated with GitHub Copilot (the CLI handles this automatically)
-//
-// Note: Tool support in adk-copilot-llm is currently in development. This example
-// demonstrates the intended API design and may require updates when full tool
-// support is implemented in the copilot package.
 package main
 
 import (
@@ -24,102 +20,75 @@ import (
 
 	"github.com/ekroon/adk-copilot-llm/copilot"
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/functiontool"
 	"google.golang.org/genai"
 )
+
+// CalculatorInput defines the input parameters for the calculator tool.
+type CalculatorInput struct {
+	Operation string  `json:"operation" jsonschema:"enum=add,enum=subtract,enum=multiply,enum=divide,description=The arithmetic operation to perform"`
+	A         float64 `json:"a" jsonschema:"description=The first number"`
+	B         float64 `json:"b" jsonschema:"description=The second number"`
+}
+
+// CalculatorOutput defines the output of the calculator tool.
+type CalculatorOutput struct {
+	Result float64 `json:"result" jsonschema:"description=The result of the operation"`
+}
+
+// calculatorFunc is the handler function that performs the actual calculation.
+func calculatorFunc(ctx tool.Context, input CalculatorInput) (CalculatorOutput, error) {
+	var result float64
+
+	switch input.Operation {
+	case "add":
+		result = input.A + input.B
+	case "subtract":
+		result = input.A - input.B
+	case "multiply":
+		result = input.A * input.B
+	case "divide":
+		// Handle division by zero
+		if input.B == 0 {
+			return CalculatorOutput{}, fmt.Errorf("division by zero is not allowed")
+		}
+		result = input.A / input.B
+	default:
+		return CalculatorOutput{}, fmt.Errorf("unsupported operation: %s", input.Operation)
+	}
+
+	return CalculatorOutput{Result: result}, nil
+}
 
 func main() {
 	ctx := context.Background()
 
 	// =========================================================================
-	// Define the calculator tool
+	// Create the calculator tool using functiontool.New
 	// =========================================================================
-	// Tools are defined using genai.Tool with FunctionDeclarations that
-	// describe the available functions, their parameters, and their purpose.
-	calculatorTool := &genai.Tool{
-		FunctionDeclarations: []*genai.FunctionDeclaration{
-			{
-				Name:        "calculator",
-				Description: "Performs basic arithmetic operations on two numbers",
-				Parameters: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"operation": {
-							Type:        genai.TypeString,
-							Description: "The arithmetic operation to perform",
-							Enum:        []string{"add", "subtract", "multiply", "divide"},
-						},
-						"a": {
-							Type:        genai.TypeNumber,
-							Description: "The first number",
-						},
-						"b": {
-							Type:        genai.TypeNumber,
-							Description: "The second number",
-						},
-					},
-					Required: []string{"operation", "a", "b"},
-				},
-			},
+	// The functiontool.New API automatically generates JSON schemas from the
+	// typed input and output structs. The jsonschema tags provide additional
+	// metadata like descriptions and enum values.
+	calculatorTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "calculator",
+			Description: "Performs basic arithmetic operations (add, subtract, multiply, divide) on two numbers",
 		},
+		calculatorFunc,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create calculator tool: %v", err)
 	}
 
 	// =========================================================================
-	// Create the calculator tool handler
+	// Create the CopilotLLM instance with the tool
 	// =========================================================================
-	// The handler is invoked when the LLM calls the calculator tool.
-	// It receives the arguments as a map and returns the result as a string.
-	calculatorHandler := func(args map[string]any) (string, error) {
-		// Extract operation parameter
-		operation, ok := args["operation"].(string)
-		if !ok {
-			return "", fmt.Errorf("invalid or missing 'operation' parameter")
-		}
-
-		// Extract numeric parameters with type assertion
-		// Numbers from JSON are typically float64
-		aVal, ok := args["a"].(float64)
-		if !ok {
-			return "", fmt.Errorf("invalid or missing 'a' parameter")
-		}
-
-		bVal, ok := args["b"].(float64)
-		if !ok {
-			return "", fmt.Errorf("invalid or missing 'b' parameter")
-		}
-
-		// Perform the calculation based on the operation
-		var result float64
-		switch operation {
-		case "add":
-			result = aVal + bVal
-		case "subtract":
-			result = aVal - bVal
-		case "multiply":
-			result = aVal * bVal
-		case "divide":
-			// Handle division by zero
-			if bVal == 0 {
-				return "", fmt.Errorf("division by zero is not allowed")
-			}
-			result = aVal / bVal
-		default:
-			return "", fmt.Errorf("unsupported operation: %s", operation)
-		}
-
-		// Return the result in a clear format
-		return fmt.Sprintf("%g %s %g = %g", aVal, operation, bVal, result), nil
-	}
-
-	// =========================================================================
-	// Create the CopilotLLM instance with tool handler
-	// =========================================================================
-	// Register the calculator handler so it can be invoked when the LLM
-	// decides to use the calculator tool.
+	// The calculator tool is passed to the copilot LLM so it can be used
+	// when generating content.
 	llm, err := copilot.New(copilot.Config{
 		Model: "gpt-4",
-		ToolHandlers: map[string]copilot.ToolHandler{
-			"calculator": calculatorHandler,
-		},
+		Tools: []tool.Tool{calculatorTool},
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Copilot LLM: %v", err)
@@ -129,13 +98,13 @@ func main() {
 	fmt.Printf("Using LLM: %s\n\n", llm.Name())
 
 	// =========================================================================
-	// Example 1: Basic calculation request
+	// Example 1: Simple multiplication
 	// =========================================================================
 	// Ask the LLM a question that should trigger the calculator tool.
 	// The LLM should recognize that it needs to use the calculator to compute
 	// the result and then include that result in its response.
-	fmt.Println("Example 1: Basic calculation")
-	fmt.Println("============================")
+	fmt.Println("Example 1: Simple multiplication")
+	fmt.Println("=================================")
 	fmt.Println("Question: What is 42 multiplied by 17?")
 	fmt.Println()
 
@@ -145,9 +114,6 @@ func main() {
 				Role:  "user",
 				Parts: []*genai.Part{genai.NewPartFromText("What is 42 multiplied by 17?")},
 			},
-		},
-		Config: &genai.GenerateContentConfig{
-			Tools: []*genai.Tool{calculatorTool},
 		},
 	}
 
@@ -163,6 +129,7 @@ func main() {
 			}
 		}
 	}
+	fmt.Println()
 	fmt.Println()
 
 	// =========================================================================
@@ -181,9 +148,6 @@ func main() {
 				Parts: []*genai.Part{genai.NewPartFromText("What is 100 divided by 5?")},
 			},
 		},
-		Config: &genai.GenerateContentConfig{
-			Tools: []*genai.Tool{calculatorTool},
-		},
 	}
 
 	fmt.Print("Response: ")
@@ -198,30 +162,28 @@ func main() {
 		}
 	}
 	fmt.Println()
-
-	// =========================================================================
-	// Example 3: Complex calculation with multiple operations
-	// =========================================================================
-	// The LLM may need to perform multiple calculations to answer the question.
-	fmt.Println("Example 3: Complex calculation")
-	fmt.Println("===============================")
-	fmt.Println("Question: If I have 15 apples and add 7 more, then divide them equally among 2 people, how many does each person get?")
 	fmt.Println()
 
-	complexRequest := &model.LLMRequest{
+	// =========================================================================
+	// Example 3: Addition with complex phrasing
+	// =========================================================================
+	// The LLM should extract the numbers and operation from natural language.
+	fmt.Println("Example 3: Addition calculation")
+	fmt.Println("================================")
+	fmt.Println("Question: If I have 15 apples and add 7 more, how many do I have?")
+	fmt.Println()
+
+	addRequest := &model.LLMRequest{
 		Contents: []*genai.Content{
 			{
 				Role:  "user",
-				Parts: []*genai.Part{genai.NewPartFromText("If I have 15 apples and add 7 more, then divide them equally among 2 people, how many does each person get?")},
+				Parts: []*genai.Part{genai.NewPartFromText("If I have 15 apples and add 7 more, how many do I have?")},
 			},
-		},
-		Config: &genai.GenerateContentConfig{
-			Tools: []*genai.Tool{calculatorTool},
 		},
 	}
 
 	fmt.Print("Response: ")
-	for resp, err := range llm.GenerateContent(ctx, complexRequest, false) {
+	for resp, err := range llm.GenerateContent(ctx, addRequest, false) {
 		if err != nil {
 			log.Fatalf("Error generating content: %v", err)
 		}
@@ -232,11 +194,13 @@ func main() {
 		}
 	}
 	fmt.Println()
+	fmt.Println()
 
 	// =========================================================================
 	// Example 4: Streaming with tools
 	// =========================================================================
 	// Demonstrate streaming responses when tools are involved.
+	// The response will arrive in chunks as it's being generated.
 	fmt.Println("Example 4: Streaming calculation")
 	fmt.Println("=================================")
 	fmt.Println("Question: Calculate 256 minus 128")
@@ -248,9 +212,6 @@ func main() {
 				Role:  "user",
 				Parts: []*genai.Part{genai.NewPartFromText("Calculate 256 minus 128")},
 			},
-		},
-		Config: &genai.GenerateContentConfig{
-			Tools: []*genai.Tool{calculatorTool},
 		},
 	}
 
@@ -269,10 +230,11 @@ func main() {
 		}
 	}
 	fmt.Println()
+	fmt.Println()
 
 	fmt.Println("All examples completed successfully!")
 	fmt.Println()
-	fmt.Println("Note: Tool support requires the copilot package to handle tool calls")
-	fmt.Println("and invoke the registered handlers. If you see responses without")
-	fmt.Println("calculated results, the tool integration may need further implementation.")
+	fmt.Println("Note: This example demonstrates the new tool.Tool interface using functiontool.New,")
+	fmt.Println("which provides type-safe tool definitions with automatic schema generation from")
+	fmt.Println("struct tags. The copilot package handles tool calls and invokes the registered tools.")
 }

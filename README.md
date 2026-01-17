@@ -166,126 +166,63 @@ go run main.go
 
 ## Tool Support
 
-Tool support enables the LLM to call external functions during conversation, allowing the model to perform actions like querying databases, calling APIs, or executing calculations. The copilot SDK provides a two-part setup:
-
-1. **Define tool schemas** using `genai.Tool` to describe available functions
-2. **Provide handlers** that execute when the LLM calls a tool
-
-The copilot SDK automatically handles the call/response cycle: when the model decides to use a tool, your handler is invoked, and the result is sent back to continue the conversation.
+Tool support enables the LLM to call external functions during conversation, allowing the model to perform actions like querying databases, calling APIs, or executing calculations. Tools are defined using the `google.golang.org/adk/tool` interface and created with `functiontool.New()` for type-safe tool definitions with automatic JSON schema generation. The copilot SDK automatically handles tool execution: when the model decides to use a tool, your handler is invoked, and the result is sent back to continue the conversation.
 
 ### Example
 
 ```go
-package main
-
 import (
-    "context"
-    "fmt"
-    "log"
-    "time"
-
     "github.com/ekroon/adk-copilot-llm/copilot"
-    "google.golang.org/adk/model"
-    "google.golang.org/genai"
+    "google.golang.org/adk/tool"
+    "google.golang.org/adk/tool/functiontool"
 )
 
-func main() {
-    ctx := context.Background()
+// Define input/output types with JSON schema tags
+type CalculatorInput struct {
+    Operation string  `json:"operation" jsonschema:"enum=add,enum=multiply,enum=divide"`
+    A         float64 `json:"a"`
+    B         float64 `json:"b"`
+}
 
-    // Define tool schema
-    tools := []*genai.Tool{
-        {
-            Name:        "get_current_time",
-            Description: "Returns the current time in RFC3339 format",
-        },
-        {
-            Name:        "calculate",
-            Description: "Performs basic arithmetic operations",
-            Parameters: map[string]any{
-                "type": "object",
-                "properties": map[string]any{
-                    "operation": map[string]any{
-                        "type":        "string",
-                        "description": "The operation to perform: add, subtract, multiply, divide",
-                    },
-                    "a": map[string]any{"type": "number"},
-                    "b": map[string]any{"type": "number"},
-                },
-                "required": []string{"operation", "a", "b"},
-            },
-        },
-    }
+type CalculatorOutput struct {
+    Result float64 `json:"result"`
+}
 
-    // Define tool handlers
-    handlers := map[string]copilot.ToolHandler{
-        "get_current_time": func(args map[string]any) (string, error) {
-            return time.Now().Format(time.RFC3339), nil
-        },
-        "calculate": func(args map[string]any) (string, error) {
-            op := args["operation"].(string)
-            a := args["a"].(float64)
-            b := args["b"].(float64)
-            
-            var result float64
-            switch op {
-            case "add":
-                result = a + b
-            case "subtract":
-                result = a - b
-            case "multiply":
-                result = a * b
-            case "divide":
-                if b == 0 {
-                    return "", fmt.Errorf("division by zero")
-                }
-                result = a / b
-            default:
-                return "", fmt.Errorf("unknown operation: %s", op)
-            }
-            
-            return fmt.Sprintf("%.2f", result), nil
-        },
-    }
-
-    // Create LLM with tool support
-    llm, err := copilot.New(copilot.Config{
-        Model:        "gpt-4",
-        ToolHandlers: handlers,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer llm.Close()
-
-    // Make request with tools
-    request := &model.LLMRequest{
-        Contents: []*genai.Content{
-            {
-                Role: "user",
-                Parts: []*genai.Part{
-                    genai.NewPartFromText("What time is it? Also, what's 42 times 1.5?"),
-                },
-            },
-        },
-        Tools: tools,
-    }
-
-    // The SDK automatically handles tool calls
-    for resp, err := range llm.GenerateContent(ctx, request, false) {
-        if err != nil {
-            log.Fatal(err)
+// Create tool using functiontool.New with type-safe handler
+calcTool, _ := functiontool.New(functiontool.Config{
+    Name:        "calculator",
+    Description: "Performs basic arithmetic operations",
+}, func(ctx tool.Context, input CalculatorInput) (CalculatorOutput, error) {
+    var result float64
+    switch input.Operation {
+    case "add":
+        result = input.A + input.B
+    case "multiply":
+        result = input.A * input.B
+    case "divide":
+        if input.B == 0 {
+            return CalculatorOutput{}, fmt.Errorf("division by zero")
         }
-        if resp.Content != nil {
-            for _, part := range resp.Content.Parts {
-                fmt.Print(part.Text)
-            }
-        }
+        result = input.A / input.B
     }
-    fmt.Println()
+    return CalculatorOutput{Result: result}, nil
+})
+
+// Create LLM with tools
+llm, _ := copilot.New(copilot.Config{
+    Model: "gpt-4",
+    Tools: []tool.Tool{calcTool},
+})
+
+// Use the LLM - tools are automatically executed
+for resp, _ := range llm.GenerateContent(ctx, req, false) {
+    // Response includes results from tool executions
 }
 ```
 
 For a complete working example, see [examples/tools/main.go](./examples/tools/main.go).
+
+**Note**: In standalone LLM mode, the `tool.Context` has limited functionality (no session state, memory, or actions). For full adk runtime features, use `llmagent.New()` with your CopilotLLM as the model provider.
 
 ## API Compatibility
 

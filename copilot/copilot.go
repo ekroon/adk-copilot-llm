@@ -4,20 +4,22 @@ package copilot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
-
-// ToolHandler is a function that handles a tool call.
-// It receives the tool arguments as a map and returns the result as a string.
-type ToolHandler func(args map[string]any) (string, error)
 
 // Config holds the configuration for the Copilot LLM.
 type Config struct {
@@ -31,9 +33,10 @@ type Config struct {
 	Streaming bool
 	// LogLevel for the copilot client (default: "error")
 	LogLevel string
-	// ToolHandlers maps tool names to their handler functions.
-	// These handlers are invoked when the LLM calls the corresponding tool.
-	ToolHandlers map[string]ToolHandler
+	// Tools is a list of tools available to the LLM.
+	// Each tool must implement google.golang.org/adk/tool.Tool and provide
+	// a Declaration() method for schema and Run() method for execution.
+	Tools []tool.Tool
 }
 
 // CopilotLLM implements the model.LLM interface for GitHub Copilot.
@@ -42,6 +45,103 @@ type CopilotLLM struct {
 	client  *copilot.Client
 	started bool
 	mu      sync.Mutex
+}
+
+// toolContext provides a minimal implementation of tool.Context for copilot-based tool execution.
+// This is a simplified context that doesn't have full adk agent runtime features.
+// For full context support (session state, memory, actions), use llmagent.New() with adk's agent runtime.
+type toolContext struct {
+	ctx    context.Context
+	callID string
+}
+
+func (tc *toolContext) Context() context.Context {
+	return tc.ctx
+}
+
+func (tc *toolContext) FunctionCallID() string {
+	return tc.callID
+}
+
+// Agent returns nil as we don't have an agent runtime in standalone LLM mode.
+func (tc *toolContext) Agent() agent.Agent {
+	return nil
+}
+
+// Session returns nil as we don't have session management in standalone LLM mode.
+func (tc *toolContext) Session() *session.Session {
+	return nil
+}
+
+// Actions returns nil as event actions are not available in standalone LLM mode.
+func (tc *toolContext) Actions() *session.EventActions {
+	return nil
+}
+
+// SearchMemory returns an error as memory search is not available in standalone LLM mode.
+func (tc *toolContext) SearchMemory(ctx context.Context, query string) (*memory.SearchResponse, error) {
+	return nil, fmt.Errorf("memory search not available in standalone LLM mode; use llmagent.New() for full adk runtime support")
+}
+
+// AgentName returns empty string as we don't have agent runtime in standalone LLM mode.
+func (tc *toolContext) AgentName() string {
+	return ""
+}
+
+// AppName returns empty string as we don't have app context in standalone LLM mode.
+func (tc *toolContext) AppName() string {
+	return ""
+}
+
+// Artifacts returns nil as artifacts are not available in standalone LLM mode.
+func (tc *toolContext) Artifacts() agent.Artifacts {
+	return nil
+}
+
+// context.Context interface methods
+func (tc *toolContext) Deadline() (deadline time.Time, ok bool) {
+	return tc.ctx.Deadline()
+}
+
+func (tc *toolContext) Done() <-chan struct{} {
+	return tc.ctx.Done()
+}
+
+func (tc *toolContext) Err() error {
+	return tc.ctx.Err()
+}
+
+func (tc *toolContext) Value(key interface{}) interface{} {
+	return tc.ctx.Value(key)
+}
+
+// ReadonlyContext interface methods
+func (tc *toolContext) UserContent() *genai.Content {
+	return nil
+}
+
+func (tc *toolContext) InvocationID() string {
+	return ""
+}
+
+func (tc *toolContext) ReadonlyState() session.ReadonlyState {
+	return nil
+}
+
+func (tc *toolContext) UserID() string {
+	return ""
+}
+
+func (tc *toolContext) SessionID() string {
+	return ""
+}
+
+func (tc *toolContext) Branch() string {
+	return ""
+}
+
+func (tc *toolContext) State() session.State {
+	return nil
 }
 
 // New creates a new CopilotLLM instance with the given configuration.
@@ -134,11 +234,11 @@ func (c *CopilotLLM) GenerateContent(ctx context.Context, req *model.LLMRequest,
 			streaming = true
 		}
 
-		// Convert genai tools to copilot tools
+		// Convert adk tools to copilot tools
 		var copilotTools []copilot.Tool
-		if req.Config != nil && len(req.Config.Tools) > 0 {
+		if len(c.config.Tools) > 0 {
 			var err error
-			copilotTools, err = c.convertTools(req.Config.Tools)
+			copilotTools, err = c.convertAdkTools(ctx, c.config.Tools)
 			if err != nil {
 				yield(nil, fmt.Errorf("failed to convert tools: %w", err))
 				return
@@ -339,67 +439,6 @@ func convertEventToResponse(event copilot.SessionEvent, partial bool) *model.LLM
 	return resp
 }
 
-// convertTools converts genai tools to copilot tools.
-func (c *CopilotLLM) convertTools(genaiTools []*genai.Tool) ([]copilot.Tool, error) {
-	var copilotTools []copilot.Tool
-
-	for _, genaiTool := range genaiTools {
-		// Only process function declarations
-		if genaiTool.FunctionDeclarations == nil {
-			continue
-		}
-
-		for _, funcDecl := range genaiTool.FunctionDeclarations {
-			// Check if handler exists
-			handler, ok := c.config.ToolHandlers[funcDecl.Name]
-			if !ok {
-				return nil, fmt.Errorf("no handler found for tool: %s", funcDecl.Name)
-			}
-
-			// Convert genai schema to map[string]interface{} for copilot
-			var parameters map[string]interface{}
-			if funcDecl.Parameters != nil {
-				parameters = schemaToMap(funcDecl.Parameters)
-			}
-
-			// Create copilot tool with a handler wrapper
-			// Capture handler in a local variable to avoid closure issues
-			h := handler
-			copilotTool := copilot.Tool{
-				Name:        funcDecl.Name,
-				Description: funcDecl.Description,
-				Parameters:  parameters,
-				Handler: func(invocation copilot.ToolInvocation) (copilot.ToolResult, error) {
-					// Extract arguments as map[string]any
-					args, ok := invocation.Arguments.(map[string]any)
-					if !ok {
-						return copilot.ToolResult{
-							Error: fmt.Sprintf("invalid arguments type: expected map[string]any, got %T", invocation.Arguments),
-						}, nil
-					}
-
-					// Call the registered handler
-					result, err := h(args)
-					if err != nil {
-						return copilot.ToolResult{
-							Error: err.Error(),
-						}, nil
-					}
-
-					// Return successful result
-					return copilot.ToolResult{
-						TextResultForLLM: result,
-					}, nil
-				},
-			}
-
-			copilotTools = append(copilotTools, copilotTool)
-		}
-	}
-
-	return copilotTools, nil
-}
-
 // schemaToMap converts a genai.Schema to a map[string]interface{} for copilot tools.
 func schemaToMap(schema *genai.Schema) map[string]interface{} {
 	if schema == nil {
@@ -502,4 +541,89 @@ func schemaToMap(schema *genai.Schema) map[string]interface{} {
 	}
 
 	return result
+}
+
+// convertAdkTools converts adk tool.Tool instances to copilot.Tool instances.
+func (c *CopilotLLM) convertAdkTools(ctx context.Context, tools []tool.Tool) ([]copilot.Tool, error) {
+	copilotTools := make([]copilot.Tool, 0, len(tools))
+
+	for _, t := range tools {
+		// Check if the tool implements the FunctionTool interface (Declaration and Run methods)
+		// We use interface assertion instead of importing internal package
+		type functionTool interface {
+			tool.Tool
+			Declaration() *genai.FunctionDeclaration
+			Run(tool.Context, any) (map[string]any, error)
+		}
+
+		ft, ok := t.(functionTool)
+		if !ok {
+			return nil, fmt.Errorf("tool %q does not implement required methods (Declaration and Run)", t.Name())
+		}
+
+		decl := ft.Declaration()
+		if decl == nil {
+			return nil, fmt.Errorf("tool %q returned nil declaration", t.Name())
+		}
+
+		// Convert declaration parameters to copilot format
+		params := declarationToParams(decl)
+
+		// Create copilot tool with wrapper handler that calls the adk tool's Run method
+		// Use closure variable to avoid capturing loop variable
+		toolRef := ft
+		toolName := t.Name()
+
+		copilotTools = append(copilotTools, copilot.Tool{
+			Name:        toolName,
+			Description: decl.Description,
+			Parameters:  params,
+			Handler: func(inv copilot.ToolInvocation) (copilot.ToolResult, error) {
+				// Create minimal tool context
+				tc := &toolContext{
+					ctx:    ctx,
+					callID: inv.ToolCallID,
+				}
+
+				// Call the adk tool's Run method
+				result, err := toolRef.Run(tc, inv.Arguments)
+				if err != nil {
+					return copilot.ToolResult{
+						Error: err.Error(),
+					}, nil
+				}
+
+				// Convert result to JSON string for LLM
+				resultJSON, err := json.Marshal(result)
+				if err != nil {
+					return copilot.ToolResult{
+						Error: fmt.Sprintf("failed to marshal result: %v", err),
+					}, nil
+				}
+
+				return copilot.ToolResult{
+					TextResultForLLM: string(resultJSON),
+				}, nil
+			},
+		})
+	}
+
+	return copilotTools, nil
+}
+
+// declarationToParams converts a genai.FunctionDeclaration's parameters to copilot tool parameter format.
+func declarationToParams(decl *genai.FunctionDeclaration) map[string]interface{} {
+	if decl.ParametersJsonSchema != nil {
+		// If ParametersJsonSchema is provided, use it directly
+		if m, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
+			return m
+		}
+	}
+
+	if decl.Parameters != nil {
+		// Convert genai.Schema to map[string]interface{}
+		return schemaToMap(decl.Parameters)
+	}
+
+	return nil
 }
