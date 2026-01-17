@@ -1,307 +1,154 @@
 # Agent Guidelines for adk-copilot-llm
 
-## Overview
+## Purpose
+This repository provides a Go implementation of the ADK `model.LLM` interface
+that uses the GitHub Copilot CLI via the official copilot SDK.
+Agents should keep changes minimal and aligned with existing patterns.
 
-adk-copilot-llm provides a GitHub Copilot implementation of the `model.LLM` interface from [google.golang.org/adk](https://pkg.go.dev/google.golang.org/adk). This allows developers to use GitHub Copilot models (GPT-4, Claude, etc.) within the ADK ecosystem.
+## Repo Layout
+- `copilot/`: core LLM implementation and unit tests.
+- `examples/`: runnable sample apps (basic + tools).
+- `README.md` / `GETTING_STARTED.md`: public docs and usage notes.
 
-**Key Architecture Points:**
-- Implements `model.LLM` interface from adk-go v0.3.0+
-- Uses official [copilot-sdk](https://github.com/github/copilot-sdk) for LLM communication
-- Supports tool execution via `google.golang.org/adk/tool` interface
-- Can be used standalone or with full ADK agent runtime (`llmagent.New()`)
+## Build, Lint, Test
+- Install dependencies: `go mod download` or `make setup`.
+- Build library package: `go build ./copilot`.
+- Run all tests: `go test -v ./...`.
+- Run copilot package tests: `go test -v ./copilot/...`.
+- Run a single test: `go test -v ./copilot -run TestName`.
+- Run vet (lint): `go vet ./...` or `make vet`.
+- Run basic example: `cd examples && GITHUB_TOKEN=... go run main.go`.
+- Run tools example: `cd examples/tools && GITHUB_TOKEN=... go run main.go`.
+- Build tools example: `cd examples/tools && go build .`.
 
-## Build/Test Commands
+## Configuration Defaults
+- Default model: `gpt-4`.
+- Default log level: `error`.
+- Default CLI path: `copilot` or `COPILOT_CLI_PATH`.
+- Streaming defaults to `false` unless configured.
 
-### Development
-- Run all tests: `go test -v ./...` or `make test`
-- Run single test: `go test -v ./copilot -run TestName`
-- Run vet (linting): `go vet ./...` or `make vet`
-- Install deps: `go mod download` or `make setup`
-- Build copilot package: `go build ./copilot`
-
-### Examples
-- Run basic example: `cd examples && GITHUB_TOKEN=your_token go run main.go`
-- Run tools example: `cd examples/tools && GITHUB_TOKEN=your_token go run main.go`
-- Build example binary: `cd examples/tools && go build .`
-
-**Note**: The `GITHUB_TOKEN` environment variable must be set with a GitHub Personal Access Token that has Copilot access.
+## Environment Variables
+- `COPILOT_CLI_PATH`: overrides the Copilot CLI binary path.
+- `GITHUB_TOKEN`: required for examples; must include Copilot access.
+- `COPILOT_CLI_PATH` from env is ignored when `Config.CLIPath` is set.
 
 ## Code Style
+### Formatting
+- Use `gofmt` for all Go files (tabs for indentation).
+- Keep spacing and alignment consistent with existing files.
+- Avoid manual alignment that `gofmt` would remove.
 
-- **Language**: Go 1.24+
-- **Imports**: Standard library first, external packages second, blank line between groups
-- **Formatting**: Use `gofmt` (tabs for indentation)
-- **Types**: Exported types have package doc comments. Struct fields documented inline when needed
-- **Naming**: Use camelCase for unexported, PascalCase for exported. Acronyms stay uppercase (e.g., `HTTPClient`, `apiKeyURL`)
-- **Error handling**: Always wrap errors with context using `fmt.Errorf("description: %w", err)`
-- **Constants**: Group related constants together, use `const` blocks with comments
-- **Interfaces**: Follow standard Go interface patterns (e.g., `model.LLM` from adk-go)
-- **Concurrency**: Use `sync.RWMutex` for thread-safe shared state, prefer read locks when possible
-- **Testing**: Use table-driven tests with `t.Run()` for subtests. Test both success and error cases
+### Imports
+- Standard library imports first.
+- Third-party imports second.
+- Keep exactly one blank line between import groups.
+- Remove unused imports instead of using blank identifiers.
 
-## Dependencies
+### Naming
+- Exported identifiers use PascalCase.
+- Unexported identifiers use camelCase.
+- Initialisms stay uppercase (e.g., `HTTPClient`, `LLMRequest`).
+- Keep receiver names short but clear (`c` for CopilotLLM, `tc` for toolContext).
+- Avoid overly terse variable names outside established receiver patterns.
 
-### Core Dependencies
-- `google.golang.org/adk` v0.3.0+ - ADK Go framework
-- `google.golang.org/genai` v1.40.0+ - GenAI types and interfaces
-- `github.com/github/copilot-sdk/go` - Official GitHub Copilot SDK
+### Types and Structs
+- Exported types require doc comments.
+- Document struct fields when behavior is non-obvious.
+- Prefer typed structs over `map[string]any`.
+- Use struct tags consistently for JSON/schema definitions.
 
-### Why These Versions?
-- **adk v0.3.0+**: Includes `tool.Tool` interface and `functiontool` package for type-safe tool definitions
-- **genai v1.40.0+**: Transitive dependency of adk v0.3.0, provides updated GenAI types
-- **copilot-sdk**: Latest version for GitHub Copilot integration
+### Error Handling
+- Wrap errors with context: `fmt.Errorf("description: %w", err)`.
+- Return early on failure; avoid nested `if` chains.
+- Include helpful context (IDs, model names, paths).
+- Avoid swallowing errors unless explicitly intentional.
 
-## Tool Support Architecture
+### Context and Resources
+- Accept `context.Context` in public entrypoints.
+- Pass contexts through to SDK calls.
+- Call `defer llm.Close()` immediately after `copilot.New()`.
+- Keep `Close` idempotent and safe to call once.
 
-### How Tools Work
+### Concurrency
+- Protect shared state with `sync.Mutex` or `sync.RWMutex`.
+- Prefer read locks for read-heavy paths.
+- Keep lock scope minimal and avoid long-running work inside locks.
 
-Tools in adk-copilot-llm follow this flow:
+## Testing Guidance
+- Use table-driven tests with `t.Run()`.
+- Cover success and error paths.
+- Use `t.Helper()` in shared helpers.
+- Keep tests deterministic and free of network dependencies.
+- Tests live next to implementation in the `copilot` package.
 
-```
-User provides tool.Tool → Extract Declaration() for schema → 
-Convert to copilot.Tool → Register with copilot SDK →
-LLM decides to call tool → copilot CLI requests execution →
-SDK calls our handler → We call tool.Run() → Return result →
-LLM continues with result → User gets final response
-```
+## Copilot LLM Implementation Notes
+- `CopilotLLM` lazily starts the CLI client via `ensureStarted()`.
+- `GenerateContent` selects `req.Model` when provided.
+- The `stream` argument overrides `config.Streaming` when true.
+- Sessions are created per request and closed after use.
 
-### Tool Interface Requirements
+## LLM Response Handling
+- The iterator yields `(response, error)`; always check `err`.
+- `resp.Content` can be nil; guard before iterating parts.
+- For streaming, output tokens as they arrive.
+- Stop processing when `resp.TurnComplete` is true.
+- Avoid returning partial responses on error.
 
-Tools must implement the `tool.Tool` interface from `google.golang.org/adk/tool`:
+## Tool Integration Notes
+- Tools must implement `tool.Tool` plus `Declaration()` and `Run()`.
+- Prefer `functiontool.New()` for type-safe schema definitions.
+- Validate tool inputs/outputs using JSON schema tags.
+- The standalone `toolContext` has limited runtime features:
+  - `Agent()`, `Session()`, `Actions()` return nil.
+  - `SearchMemory()` returns an error.
+- For full runtime features, use `llmagent.New()` in adk-go.
 
-```go
-type Tool interface {
-    Name() string
-    Description() string
-    IsLongRunning() bool
-}
-```
+## Tool Conversion Flow
+- Validate tool implements required interfaces.
+- Convert `genai.FunctionDeclaration` to Copilot parameters.
+- Wrap handler to build `toolContext` with call ID.
+- Run tool via `tool.Run(ctx, args)`.
+- Marshal output to JSON for Copilot SDK.
+- Return errors to the LLM if handler fails.
 
-Additionally, for execution support, tools must implement:
+## Tool Schema Guidelines
+- Use `jsonschema` tags for enums and validation.
+- Keep input/output structs small and typed.
+- Return a `map[string]any` only when required.
 
-```go
-Declaration() *genai.FunctionDeclaration
-Run(tool.Context, any) (map[string]any, error)
-```
+## Prompt Formatting
+- `formatPrompt` maps `model` role to `Assistant`.
+- `system` content is prefixed with `System:`.
+- Multi-turn conversation inserts blank lines between turns.
+- Keep prompt formatting stable when modifying prompt logic.
 
-This is automatically satisfied by tools created with `functiontool.New()`.
+## Logging and Debugging
+- Use `config.LogLevel` to tune CLI logs (`error`, `warn`, `info`, `debug`).
+- Prefer structured context in error messages over extra logging.
+- Avoid printing directly in library code.
 
-### Tool Context Limitations
+## Go Module Conventions
+- Go version is `1.24.10` (see `go.mod`).
+- Add dependencies only when required.
+- Run `go mod tidy` only if dependencies change.
 
-The `toolContext` implementation in standalone LLM mode provides:
-- ✅ `Context()` - Standard Go context
-- ✅ `FunctionCallID()` - Tool invocation ID
-- ❌ `Agent()` - Returns nil (no agent runtime)
-- ❌ `Session()` - Returns nil (no session management)
-- ❌ `Actions()` - Returns nil (no event actions)
-- ❌ `SearchMemory()` - Returns error (no memory)
+## Documentation
+- Update `README.md` or `GETTING_STARTED.md` when public APIs change.
+- Keep example code in sync with API changes.
+- Mention new environment variables or config fields in docs.
 
-**For full context features**, use `llmagent.New()` with CopilotLLM as the model provider.
+## Examples and CLI
+- Examples rely on the GitHub Copilot CLI being installed.
+- The Copilot CLI is managed by `gh copilot`.
+- If docs or tests mention the CLI, note required authentication.
 
-### Creating Tools
+## Change Hygiene
+- Keep edits focused on the requested behavior.
+- Avoid refactors unless they directly support the change.
+- Keep diff size minimal; follow existing patterns.
 
-**Recommended approach** using `functiontool.New()`:
-
-```go
-import "google.golang.org/adk/tool/functiontool"
-
-type CalculatorInput struct {
-    Operation string  `json:"operation" jsonschema:"enum=add,enum=multiply"`
-    A         float64 `json:"a"`
-    B         float64 `json:"b"`
-}
-
-type CalculatorOutput struct {
-    Result float64 `json:"result"`
-}
-
-calcTool, err := functiontool.New(functiontool.Config{
-    Name:        "calculator",
-    Description: "Performs arithmetic operations",
-}, func(ctx tool.Context, input CalculatorInput) (CalculatorOutput, error) {
-    var result float64
-    switch input.Operation {
-    case "add":
-        result = input.A + input.B
-    case "multiply":
-        result = input.A * input.B
-    }
-    return CalculatorOutput{Result: result}, nil
-})
-```
-
-Benefits:
-- Type-safe input/output with Go structs
-- Automatic JSON schema generation from struct tags
-- Built-in validation via `jsonschema` tags
-- Clean error handling
-
-### Tool Conversion Process
-
-When you pass tools to `Config.Tools`, the implementation:
-
-1. **Validates** each tool implements required interfaces
-2. **Extracts** `Declaration()` for the function schema
-3. **Converts** genai.FunctionDeclaration to copilot.Tool format using `declarationToParams()`
-4. **Creates** wrapper handler that:
-   - Instantiates minimal `toolContext` with invocation context
-   - Calls the tool's `Run(ctx, args)` method
-   - Marshals result to JSON for LLM
-   - Handles errors and returns `copilot.ToolResult`
-
-### Testing Tools
-
-When writing tests for tool functionality:
-
-```go
-func TestMyTool(t *testing.T) {
-    // Create tool
-    tool, err := functiontool.New(...)
-    
-    // Create LLM with tool
-    llm, err := copilot.New(copilot.Config{
-        Model: "gpt-4",
-        Tools: []tool.Tool{tool},
-    })
-    
-    // Test tool execution via LLM
-    req := &model.LLMRequest{
-        Contents: []*genai.Content{{
-            Role:  "user",
-            Parts: []*genai.Part{genai.NewPartFromText("Calculate 2 + 2")},
-        }},
-    }
-    
-    for resp, err := range llm.GenerateContent(ctx, req, false) {
-        // Verify response includes tool result
-    }
-}
-```
-
-## Common Patterns
-
-### Standalone LLM Usage
-
-Simple request/response with automatic tool execution:
-
-```go
-llm, _ := copilot.New(copilot.Config{
-    Model: "gpt-4",
-    Tools: []tool.Tool{myTool},
-})
-
-for resp, err := range llm.GenerateContent(ctx, req, false) {
-    // Response includes tool execution results
-}
-```
-
-### Full ADK Agent Integration
-
-For session management, memory, and full context:
-
-```go
-import "google.golang.org/adk/agent/llmagent"
-
-// Create LLM (no tools here)
-llm, _ := copilot.New(copilot.Config{Model: "gpt-4"})
-
-// Create agent with tools
-agent, _ := llmagent.New(llmagent.Config{
-    Name:  "my_agent",
-    Model: llm,
-    Tools: []tool.Tool{myTool},
-})
-
-// Run with full ADK runtime
-runner := agent.NewRunner(...)
-for event := range runner.Run(ctx, ...) {
-    // Full event stream with tool execution
-}
-```
-
-### Multi-turn Conversations
-
-```go
-conversation := []*genai.Content{
-    {Role: "user", Parts: []*genai.Part{genai.NewPartFromText("Hello")}},
-    {Role: "model", Parts: []*genai.Part{genai.NewPartFromText("Hi there!")}},
-    {Role: "user", Parts: []*genai.Part{genai.NewPartFromText("What's 2+2?")}},
-}
-
-req := &model.LLMRequest{Contents: conversation}
-for resp, err := range llm.GenerateContent(ctx, req, false) {
-    // Response maintains conversation context
-}
-```
-
-## Error Handling
-
-### Tool Errors
-
-Tool handlers should return descriptive errors:
-
-```go
-func(ctx tool.Context, input MyInput) (MyOutput, error) {
-    if input.Value < 0 {
-        return MyOutput{}, fmt.Errorf("value must be non-negative, got %d", input.Value)
-    }
-    // ... tool logic
-}
-```
-
-The copilot SDK will pass the error back to the LLM, which can retry or explain the error to the user.
-
-### LLM Errors
-
-Check for errors in the response iterator:
-
-```go
-for resp, err := range llm.GenerateContent(ctx, req, false) {
-    if err != nil {
-        return fmt.Errorf("generation failed: %w", err)
-    }
-    // Process response
-}
-```
-
-## .gitignore Patterns
-
-Add these to `.gitignore`:
-
-```gitignore
-# Build artifacts
-examples/tools/tools
-examples/main
-
-# IDE
-.vscode/
-.idea/
-*.swp
-```
-
-## Breaking Changes
-
-### v0.2.0 → Current (Tool Refactoring)
-
-**Old approach** (now removed):
-```go
-copilot.New(copilot.Config{
-    ToolHandlers: map[string]copilot.ToolHandler{
-        "calc": func(args map[string]any) (string, error) { ... },
-    },
-})
-```
-
-**New approach**:
-```go
-tool, _ := functiontool.New(...)
-copilot.New(copilot.Config{
-    Tools: []tool.Tool{tool},
-})
-```
-
-Benefits:
-- Type-safe tool definitions
-- Automatic schema generation
-- Standard ADK integration
-- Better testing support
+## Quick Reference
+- Tests: `go test -v ./...`.
+- Single test: `go test -v ./copilot -run TestName`.
+- Vet: `go vet ./...`.
+- Build: `go build ./copilot`.
